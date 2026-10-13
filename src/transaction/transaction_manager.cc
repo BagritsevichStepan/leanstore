@@ -8,6 +8,7 @@
 #include "recovery/log_entry.h"
 #include "storage/btree/tree.h"
 #include "transaction/mvcc/lock_manager.h"
+#include "transaction/svcc/inpage_lock_manager.h"
 #include "transaction/svcc/lock_manager.h"
 
 #include "share_headers/time.h"
@@ -26,6 +27,8 @@ thread_local timestamp_t TransactionManager::previous_completed_time = 0;
 TransactionManager::TransactionManager(buffer::BufferManager *buffer_manager, LogManager *log_manager,
                                        std::atomic<bool> &is_running)
     : buffer_(buffer_manager), log_manager_(log_manager) {
+  Ensure(!(FLAGS_txn_mvcc && FLAGS_txn_lock_inpage));
+
   if (FLAGS_txn_mvcc) {
     version_manager_       = std::make_unique<mvcc::VersionManager>();
     lock_manager_          = std::make_unique<mvcc::LockManager>(version_manager_.get());
@@ -35,8 +38,11 @@ TransactionManager::TransactionManager(buffer::BufferManager *buffer_manager, Lo
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
     });
-  } else {
+  } else if (!FLAGS_txn_lock_inpage) {
     lock_manager_          = std::make_unique<svcc::LockManager>();
+    background_version_gc_ = std::thread();
+  } else {
+    lock_manager_          = std::make_unique<svcc::InPageLockManager>();
     background_version_gc_ = std::thread();
   }
 };

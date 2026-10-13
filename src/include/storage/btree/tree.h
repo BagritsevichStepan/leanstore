@@ -9,6 +9,7 @@
 #include "sync/page_guard/exclusive_guard.h"
 #include "sync/page_guard/optimistic_guard.h"
 #include "sync/page_guard/shared_guard.h"
+#include "transaction/cc_mode.h"
 
 #include <cstring>
 #include <functional>
@@ -85,10 +86,11 @@ class BTree : public KVInterface {
     if (!node.TryLockShared(metadata_slotid_, key_span)) { return OpResult::ABORT_TX; }
 
     // Actual scan read
-    LOCKABLE_TUPLE_STACK(lockable, key_span, metadata_slotid_);
     auto payload = node->GetPayload(pos);
     auto &txn    = transaction::Transaction::active_txn;
-    if (FLAGS_txn_mvcc && txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
+
+    if (transaction::IsMvcc() && txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
+      LOCKABLE_TUPLE_STACK(lockable, key_span, metadata_slotid_);
       auto latest_tuple_ts = node->GetTimestamp(pos);
       if (txn.start_ts < latest_tuple_ts) {
         auto read_success = txn.LookupVersionChain(
@@ -108,6 +110,7 @@ class BTree : public KVInterface {
       }
       txn.UpdateTupleReadTS(lockable, latest_tuple_ts);
     }
+    
     auto ret = fn(key_span, payload);
     node.ValidateOrRestart(false);
     return (ret) ? OpResult::OK : OpResult::STOP_SCAN;

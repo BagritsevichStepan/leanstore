@@ -51,6 +51,9 @@ DEFINE_bool(txn_mvcc, false,
             "For SVCC, 2PL Wait-Die is implemented"
             "For MVCC, Hyper-style MVCC with OCC validation (no predicate locking) is implemented"
             "Note that, this MVCC impl suffers from phantom read -- it is acceptable for a simple prototype");
+DEFINE_bool(txn_lock_inpage, false,
+            "SVCC only: keep 2PL (No-Wait) locks in a lock table per B-tree leaf, attached to the leaf's buffer frame,"
+            " instead of in one global lock table. Mutually exclusive with txn_mvcc");
 DEFINE_string(txn_default_isolation_level, "ru",
               "The serializable mode used in LeanStore, only support two following modes"
               "(ru: READ_UNCOMMITTED, ser: SERIALIZABLE)");

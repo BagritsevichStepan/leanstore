@@ -46,7 +46,8 @@ void LockManager::ReleaseAllLocks(timestamp_t txn_ts, const WriteSetCallback &wr
   });
 }
 
-bool LockManager::TryLockShared(u64 txn_ts, const LockableTuple *key) {
+bool LockManager::TryLockShared(u64 txn_ts, const LockableTuple *key,
+                                [[maybe_unused]] svcc::PageLockTable *page_locks) {
   // Already hold an lock on the tuple, return
   if (LockManager::read_set_.contains(key) || LockManager::write_set_.contains(key)) { return true; }
   // Haven't locked the tuple before, insert a new WaitDieLock in the internal map
@@ -58,7 +59,7 @@ bool LockManager::TryLockShared(u64 txn_ts, const LockableTuple *key) {
 }
 
 bool LockManager::TryLock(u64 txn_ts, [[maybe_unused]] timestamp_t undo_ts, std::span<u8> undo_payload,
-                          const LockableTuple *key) {
+                          const LockableTuple *key, [[maybe_unused]] svcc::PageLockTable *page_locks) {
   LockableTuple *tuple;
   WaitDieLock *lock = nullptr;
 

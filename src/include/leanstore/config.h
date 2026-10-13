@@ -31,6 +31,7 @@ DECLARE_uint32(wal_recovery_threads);
 // -------------------------------------------------------------------------------------
 DECLARE_bool(txn_debug);
 DECLARE_bool(txn_mvcc);
+DECLARE_bool(txn_lock_inpage);
 DECLARE_int32(txn_commit_variant);
 DECLARE_uint32(txn_commit_group_size);
 DECLARE_uint32(txn_queue_size_mb);

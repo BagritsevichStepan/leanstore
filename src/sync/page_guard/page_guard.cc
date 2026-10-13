@@ -1,10 +1,13 @@
 #include "sync/page_guard/page_guard.h"
+#include "buffer/buffer_manager.h"
 #include "leanstore/leanstore.h"
 #include "storage/btree/node.h"
 #include "storage/page.h"
 #include "sync/page_state.h"
 #include "transaction/lockable_tuple.h"
+#include "transaction/cc_mode.h"
 #include "transaction/mvcc/lock_manager.h"
+#include "transaction/svcc/page_lock_table.h"
 
 #include <stdexcept>
 #include <type_traits>
@@ -57,13 +60,21 @@ auto PageGuard<PageClass>::OwnTuple(leng_t tree_id, std::span<u8> key) -> bool {
 }
 
 template <class PageClass>
+auto PageGuard<PageClass>::GetPageLockTable() -> transaction::svcc::PageLockTable * {
+  if (!transaction::IsSvccInPageLock()) {
+    return nullptr;
+  }
+  return buffer_->BufferFramePage(page_id_).GetOrCreateLockTable();
+}
+
+template <class PageClass>
 auto PageGuard<PageClass>::TryLockShared(leng_t tree_id, std::span<u8> key) -> bool {
   auto &txn = TM::active_txn;
   Ensure(txn.IsRunning());
   if (txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
     LOCKABLE_TUPLE_STACK(lockable, key, tree_id);
     return (FLAGS_txn_mvcc && transaction::mvcc::LockManager::OwnTuple(lockable)) ||
-           txn.LockManager()->TryLockShared(txn.start_ts, lockable);
+           txn.LockManager()->TryLockShared(txn.start_ts, lockable, GetPageLockTable());
   }
   return true;
 }
@@ -75,7 +86,7 @@ auto PageGuard<PageClass>::TryLock(leng_t tree_id, timestamp_t tuple_ts, std::sp
   Ensure(txn.IsRunning());
   if (txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
     LOCKABLE_TUPLE_STACK(lockable, key, tree_id);
-    return txn.LockManager()->TryLock(txn.start_ts, tuple_ts, undo_payload, lockable);
+    return txn.LockManager()->TryLock(txn.start_ts, tuple_ts, undo_payload, lockable, GetPageLockTable());
   }
   return true;
 }

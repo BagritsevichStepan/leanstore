@@ -52,7 +52,8 @@ auto LockManager::OwnTuple(const LockableTuple *key) -> bool { return write_set_
 // For MVCC:
 // - we never acquire shared lock on a tuple.
 // - After calling this fn, we always call SetTupleTimestamp()
-bool LockManager::TryLockShared([[maybe_unused]] timestamp_t txn_ts, const LockableTuple *key) {
+bool LockManager::TryLockShared([[maybe_unused]] timestamp_t txn_ts, const LockableTuple *key,
+                                [[maybe_unused]] svcc::PageLockTable *page_locks) {
   // The correct timestamp will be updated later using SetTupleTimestamp()
   // It's fine for the below to fail
   auto new_key      = LockableTuple::Constructor(*key);
@@ -63,7 +64,7 @@ bool LockManager::TryLockShared([[maybe_unused]] timestamp_t txn_ts, const Locka
 }
 
 bool LockManager::TryLock([[maybe_unused]] timestamp_t txn_ts, timestamp_t undo_ts, std::span<u8> undo_payload,
-                          const LockableTuple *key) {
+                          const LockableTuple *key, [[maybe_unused]] svcc::PageLockTable *page_locks) {
   // If already hold an exclusive lock on this tuple, return true immediately
   if (write_set_.contains(key)) { return true; }
   // Lookup or insert into the internal map to acquire X-lock

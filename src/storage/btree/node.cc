@@ -385,6 +385,7 @@ auto BTreeNodeImpl<NodeHeader>::RemoveSlot(leng_t slot_id, bool soft_delete) -> 
   } else {
     header.space_used -= slots[slot_id].key_length;
     header.space_used -= slots[slot_id].payload_length;
+    header.space_used -= KV_HAS_TIMESTAMP(*this) * sizeof(timestamp_t);
     std::move(&slots[slot_id + 1], &slots[header.count], &slots[slot_id]);
     header.count--;
     MakeHint();
