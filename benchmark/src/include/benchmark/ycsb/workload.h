@@ -177,6 +177,12 @@ struct YCSBWorkload : public YCSBWorkloadInterface {
   }
 
   void ExecuteTransaction(UInteger w_id) override {
+    for (auto op = 0U; op < FLAGS_ycsb_ops_per_txn; op++) {
+      ExecuteOperation(w_id);
+    }
+  }
+
+  void ExecuteOperation(UInteger w_id) {
     auto access_key  = static_cast<UInteger>(zipf_generator.Rand());
     auto is_read_txn = UniformRand(1, 100) <= read_ratio;
     auto payload     = payloads[w_id].get();

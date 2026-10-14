@@ -203,9 +203,11 @@ void TransactionManager::AbortTransaction() {
     }
   }
 
-  // if WAl is disabled, simply ack the txn
   if (!FLAGS_wal_enable) {
-    if (start_profiling) { statistics::precommited_txn[LeanStore::worker_thread_id] += 1; }
+    if (start_profiling) {
+      statistics::precommited_txn[LeanStore::worker_thread_id] += 1;
+      statistics::aborted_txn[LeanStore::worker_thread_id] += 1;
+    }
   }
 }
 

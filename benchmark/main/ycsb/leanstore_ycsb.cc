@@ -84,8 +84,12 @@ auto main(int argc, char **argv) -> int {
     db->worker_pool.ScheduleAsyncJob(w_id, [&, w_id]() {
       while (keep_running.load()) {
         db->StartTransaction(ycsb->NextTransactionArrivalTime([&]() { db->CheckDuringIdle(); }));
-        ycsb->ExecuteTransaction(w_id);
-        db->CommitTransaction();
+        try {
+          ycsb->ExecuteTransaction(w_id);
+          db->CommitTransaction();  // success path
+        } catch (leanstore::ex::AbortTransaction &e) {
+          db->AbortTransaction();  // failure path, e.g. No-Wait lock conflict
+        }
       }
     });
   }

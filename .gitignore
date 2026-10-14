@@ -1,4 +1,11 @@
 build/
+build-bench/
+build-bench-prod/
+build-bench-*/
+build-test-*/
+scripts/
+results/
+third_party/
 release/
 benchmark/src/wikipedia/config.cc
 benchmark/src/gitclone/config.cc

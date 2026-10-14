@@ -289,7 +289,7 @@ void LeanStore::StartProfilingThread() {
         aborted_tx += statistics::aborted_txn[idx].exchange(0);
         precommited_tx += statistics::precommited_txn[idx].exchange(0);
       }
-      if (!FLAGS_wal_enable) { committed_tx = precommited_tx; }
+      if (!FLAGS_wal_enable) { committed_tx = (precommited_tx > aborted_tx) ? precommited_tx - aborted_tx : 0; }
       statistics::total_committed_txn += committed_tx;
       commit_rounds += rounds;
       // System stats

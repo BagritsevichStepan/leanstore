@@ -5,6 +5,7 @@ DEFINE_bool(ycsb_random_payload, false, "Whether to use random payload for YCSB"
 DEFINE_uint32(ycsb_record_count, 100000, "Number of initial records");
 DEFINE_double(ycsb_zipf_theta, 0, "The zipfian dist's theta parameter");
 DEFINE_uint32(ycsb_read_ratio, 100, "Read ratio");
+DEFINE_uint32(ycsb_ops_per_txn, 1, "Number of operations (read or update, each by ycsb_read_ratio) per transaction");
 DEFINE_uint64(ycsb_exec_seconds, 20, "Execution time");
 DEFINE_uint64(ycsb_payload_size, 120,
               "Size of key-value payload. Only support 120 bytes (default), 4KB, 100KB, and 10MB");

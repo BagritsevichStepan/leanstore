@@ -45,8 +45,11 @@ class RestartException {
   })                                                                                                 \
                              : (void)0)
 
-#ifdef DEBUG
+#if defined(DEBUG)
 #define Ensure(e) assert(e);
+#elif defined(LEANSTORE_DISABLE_ENSURE)
+// Production-like build: drop the check, but still evaluate `e` in case it has side effects
+#define Ensure(e) ((void)(e))
 #else
 #define Ensure(e) AlwaysCheck(e)
 #endif
