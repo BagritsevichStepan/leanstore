@@ -1,6 +1,5 @@
 #include "transaction/svcc/page_lock_table.h"
 #include "common/exceptions.h"
-#include "sync/hybrid_guard.h"
 
 #include <algorithm>
 #include <mutex>
@@ -82,8 +81,6 @@ auto LockState::TryAcquireExclusive(wid_t worker_id, bool holds_shared) -> bool 
 auto PageLockTable::GetOrCreate(std::span<const u8> key) -> LockState * {
   const auto as_view = ToView(key);
 
-  sync::HybridGuard guard(&latch_, sync::GuardMode::EXCLUSIVE);
-
   auto it = entries_.find(as_view);
   if (it == entries_.end()) {
     it = entries_.try_emplace(std::string(as_view)).first;
@@ -94,9 +91,6 @@ auto PageLockTable::GetOrCreate(std::span<const u8> key) -> LockState * {
 
 void PageLockTable::MoveUpperRange(std::span<const u8> separator, const ComparisonLambda &cmp,
                                    PageLockTable &right) {
-  sync::HybridGuard left_guard(&latch_, sync::GuardMode::EXCLUSIVE);
-  sync::HybridGuard right_guard(&right.latch_, sync::GuardMode::EXCLUSIVE);
-
   for (auto it = entries_.begin(); it != entries_.end();) {
     auto next = std::next(it);
     if (CompareKeys(it->first, separator, cmp) > 0) {
@@ -109,9 +103,6 @@ void PageLockTable::MoveUpperRange(std::span<const u8> separator, const Comparis
 
 void PageLockTable::MergeInto(PageLockTable &right, std::span<const u8> left_upper_fence,
                               const ComparisonLambda &cmp) {
-  sync::HybridGuard left_guard(&latch_, sync::GuardMode::EXCLUSIVE);
-  sync::HybridGuard right_guard(&right.latch_, sync::GuardMode::EXCLUSIVE);
-
   while (!entries_.empty()) {
     auto node = entries_.extract(entries_.begin());
 

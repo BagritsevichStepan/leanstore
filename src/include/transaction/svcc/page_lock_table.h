@@ -3,7 +3,6 @@
 #include "common/exceptions.h"
 #include "common/typedefs.h"
 #include "leanstore/kv_interface.h"
-#include "sync/hybrid_latch.h"
 
 #include <atomic>
 #include <functional>
@@ -33,13 +32,17 @@ class LockState {
   void ReleaseShared();
   void ReleaseExclusive();
 
+  /* Neither shared nor exclusive holders */
+  auto IsFree() const -> bool;
+
  private:
   std::atomic<u32> word_{0};
 };
 
 /**
- * @brief Lock table of a single B-tree leaf, hung off the buffer frame of that leaf
- *        (see BufferFrame::GetOrCreateLockTable()).
+ * @brief Lock table of a single page.
+ *
+ * Not thread-safe: the caller holds the latch of the page's PageLockState (see PageLockState::Guard).
  */
 class PageLockTable {
  private:
@@ -56,6 +59,12 @@ class PageLockTable {
  public:
   auto GetOrCreate(std::span<const u8> key) -> LockState *;
 
+  /* Applies update_lock(LockState &) to the lock of `key`, which must be in the table; erases it once free */
+  template <typename UpdateLockFn>
+  void UpdateLockState(std::span<const u8> key, UpdateLockFn &&update_lock);
+
+  auto Empty() const -> bool;
+
   /* Leaf split: hand the entries of every key > separator over to the new right sibling */
   void MoveUpperRange(std::span<const u8> separator, const ComparisonLambda &cmp, PageLockTable &right);
   /* Leaf merge of this (left) leaf into `right`: hand every entry over to `right` */
@@ -64,7 +73,6 @@ class PageLockTable {
  private:
   static void Bury(Map::node_type &&node);
 
-  sync::HybridLatch latch_;
   Map entries_;
 };
 
@@ -85,6 +93,25 @@ inline void LockState::ReleaseShared() {
 inline void LockState::ReleaseExclusive() {
   auto prev_exclusive_owner = word_.fetch_and(SHARED_MASK);
   Ensure(GetOwnerId(prev_exclusive_owner) != NO_OWNER);
+}
+
+inline auto LockState::IsFree() const -> bool {
+  return word_.load() == 0;
+}
+
+template <typename UpdateLockFn>
+void PageLockTable::UpdateLockState(std::span<const u8> key, UpdateLockFn &&update_lock) {
+  auto lock = entries_.find(std::string_view(reinterpret_cast<const char *>(key.data()), key.size()));
+  Ensure(lock != entries_.end());
+
+  update_lock(lock->second);
+  if (lock->second.IsFree()) {
+    entries_.erase(lock);
+  }
+}
+
+inline auto PageLockTable::Empty() const -> bool {
+  return entries_.empty();
 }
 
 }  // namespace leanstore::transaction::svcc
