@@ -93,7 +93,13 @@ BufferManager::BufferManager(u64 virtual_page_count, u64 physical_page_count, u6
   Construction();
 }
 
-BufferManager::~BufferManager() { close(blockfd_); }
+BufferManager::~BufferManager() {
+  for (pageid_t pid = 0; pid < alloc_cnt_.load(); pid++) {
+    frame_[pid].lock_state.reset();
+  }
+  
+  close(blockfd_);
+}
 
 /**
  * @brief Format of the virtual memory buffer pool is as followed:

@@ -1,10 +1,11 @@
 #pragma once
 
 #include "common/typedefs.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/page_lock_state.h"
 
 #include <atomic>
 #include <bitset>
+#include <memory>
 
 namespace leanstore::buffer {
 
@@ -15,15 +16,10 @@ struct BufferFrame {
   wid_t last_writer;     // the id of last worker who modifies this page since its last flush
   u64 last_written_gsn;  // the last gsn that this extent/page was written to storage
 
+  // SVCC in-page locking: nullptr if the page holds no locks
+  std::unique_ptr<transaction::svcc::PageLockState> lock_state;
+
   void Init();
-
-  auto GetLockTable() -> transaction::svcc::PageLockTable *;
-  auto GetOrCreateLockTable() -> transaction::svcc::PageLockTable *;
-
- private:
-  /* Created lazily and never replaced while the page lives.
-   * It lives in the frame, not in the page, hence survives eviction */
-  std::atomic<transaction::svcc::PageLockTable *> lock_table_;
 };
 
 /**
@@ -45,27 +41,7 @@ static_assert(sizeof(ExtentFrame) == 8);
 inline void BufferFrame::Init() {
   last_writer = 0;
   last_written_gsn = 0;
-  lock_table_.store(nullptr, std::memory_order_release);
-}
-
-inline auto BufferFrame::GetLockTable() -> transaction::svcc::PageLockTable * {
-  return lock_table_.load(std::memory_order_acquire);
-}
-
-inline auto BufferFrame::GetOrCreateLockTable() -> transaction::svcc::PageLockTable * {
-  auto table = lock_table_.load(std::memory_order_acquire);
-  if (table != nullptr) {
-    return table;
-  }
-
-  auto new_table = new transaction::svcc::PageLockTable();
-  if (lock_table_.compare_exchange_strong(table, new_table, std::memory_order_acq_rel)) {
-    return new_table;
-  }
-
-  // Another thread created the table first
-  delete new_table;
-  return table;
+  lock_state.reset();
 }
 
 }  // namespace leanstore::buffer

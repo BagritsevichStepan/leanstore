@@ -4,7 +4,7 @@
 #include "common/utils.h"
 #include "leanstore/env.h"
 #include "storage/blob/blob_manager.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/page_lock_state.h"
 #include "transaction/transaction.h"
 
 #include <cstring>
@@ -19,7 +19,7 @@ using leanstore::transaction::IsMvcc;
 using leanstore::transaction::IsSvccInPageLock;
 using leanstore::transaction::IsSvccLockTable;
 using leanstore::transaction::Transaction;
-using leanstore::transaction::svcc::PageLockTable;
+using leanstore::transaction::svcc::PageLockState;
 
 namespace leanstore::storage {
 
@@ -28,6 +28,7 @@ BTree::BTree(buffer::BufferManager *buffer_pool, u32 tree_slot) : buffer_(buffer
     ExclusiveGuard<MetadataPage> meta_page(buffer_, METADATA_PAGE_ID);
     ExclusiveGuard<BTreeNode> root_page(buffer_, buffer_->AllocPage());
     new (root_page.Ptr()) storage::BTreeNode(true);
+    InitLockState(root_page.PageID());
     meta_page->roots[metadata_slotid_] = root_page.PageID();
     // -------------------------------------------------------------------------------------
     if (FLAGS_wal_enable) {
@@ -38,6 +39,12 @@ BTree::BTree(buffer::BufferManager *buffer_pool, u32 tree_slot) : buffer_(buffer
 }
 
 void BTree::SetComparisonOperator(ComparisonLambda cmp_op) { cmp_lambda_ = cmp_op; }
+
+void BTree::InitLockState(pageid_t leaf_pid) {
+  if (IsSvccInPageLock()) {
+    buffer_->BufferFramePage(leaf_pid).lock_state = std::make_unique<PageLockState>();
+  }
+}
 
 auto BTree::IterateAllNodes(OptimisticGuard<BTreeNode> &node, const std::function<u64(BTreeNode &)> &inner_fn,
                             const std::function<u64(BTreeNode &)> &leaf_fn) -> u64 {
@@ -125,20 +132,29 @@ void BTree::TrySplit(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
   node->GetSeparatorKey(sep_key, sep_info);
 
   if (parent->HasSpaceForKV(sep_info.len, sizeof(pageid_t))) {
+    // A split never changes the kind of the node
+    const bool node_is_inner = node->IsInner();
+
     // alloc a new child page
     ExclusiveGuard<BTreeNode> new_child(buffer_, buffer_->AllocPage());
-    new (new_child.Ptr()) storage::BTreeNode(!node->IsInner());
+    new (new_child.Ptr()) storage::BTreeNode(!node_is_inner);
+
+    if (!node_is_inner) {
+      InitLockState(new_child.PageID());
+    }
+
     // now split the node
     node->SplitNode(parent.Ptr(), new_child.Ptr(), node.PageID(), new_child.PageID(), sep_info.slot,
                     {sep_key, sep_info.len}, cmp_lambda_);
     assert(node->IsInner() == new_child->IsInner());
+
     // SVCC in-page: the locks of the keys that moved to the new leaf move along
-    if (IsSvccInPageLock() && !node->IsInner()) {
-      if (auto left_locks = buffer_->BufferFramePage(node.PageID()).GetLockTable(); left_locks != nullptr) {
-        left_locks->MoveUpperRange({sep_key, sep_info.len}, cmp_lambda_,
-                            *buffer_->BufferFramePage(new_child.PageID()).GetOrCreateLockTable());
-      }
+    if (IsSvccInPageLock() && !node_is_inner) {
+      auto left_locks = buffer_->BufferFramePage(node.PageID()).lock_state->Lock();
+      auto right_locks = buffer_->BufferFramePage(new_child.PageID()).lock_state->Lock();
+      left_locks.GetLockTable().MoveUpperRange({sep_key, sep_info.len}, cmp_lambda_, right_locks.GetLockTable());
     }
+    
     // -------------------------------------------------------------------------------------
     if (FLAGS_wal_enable) {
       // WAL new node
@@ -156,7 +172,7 @@ void BTree::TrySplit(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
       {
         auto &entry = node.PrepareWalEntry<WALLogicalSplit>(0);
         entry.sep   = sep_info;
-        if (!node->IsInner()) { entry.next_leaf_node = node->header.next_leaf_node; }
+        if (!node_is_inner) { entry.next_leaf_node = node->header.next_leaf_node; }
         node.SubmitActiveWalEntry();
       }
     }
@@ -204,10 +220,10 @@ void BTree::TryMerge(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
   if (left->MergeNodes(left_pos, parent.Ptr(), right.Ptr(), cmp_lambda_)) {
     // SVCC in-page: the locks of the left leaf move to the right one. MergeNodes() leaves the left page as is
     if (IsSvccInPageLock() && !right->IsInner()) {
-      if (auto left_locks = buffer_->BufferFramePage(left.PageID()).GetLockTable(); left_locks != nullptr) {
-        left_locks->MergeInto(*buffer_->BufferFramePage(right.PageID()).GetOrCreateLockTable(),
-                              left->GetUpperFence(), cmp_lambda_);
-      }
+      auto left_locks = buffer_->BufferFramePage(left.PageID()).lock_state->Lock();
+      auto right_locks = buffer_->BufferFramePage(right.PageID()).lock_state->Lock();
+      left_locks.GetLockTable().MergeInto(right_locks.GetLockTable(), left->GetUpperFence(), cmp_lambda_);
+      left_locks.Retire();
     }
     // TODO(XXX): Free page left.PageID()
     if (FLAGS_wal_enable) {

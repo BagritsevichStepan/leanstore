@@ -3,7 +3,7 @@
 #include "common/typedefs.h"
 #include "transaction/lock_manager_interface.h"
 #include "transaction/lockable_tuple.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/page_lock_state.h"
 
 #include <span>
 #include <unordered_map>
@@ -15,7 +15,7 @@ namespace leanstore::transaction::svcc {
 /**
  * @brief SVCC 2PL (No-Wait) whose locks live in per-leaf PageLockTables instead of one global lock table.
  *
- * It does not own the locks: every lock request comes with the lock table of the leaf covering the key,
+ * It does not own the locks: every lock request comes with the PageLockState of the leaf covering the key,
  * and this manager only tracks what the running transaction holds.
  *
  * A transaction remembers the LockState objects it holds and releases them through these pointers,
@@ -34,9 +34,9 @@ class InPageLockManager : public ILockManager {
   bool EmptyLocalSet() override;
   void ReleaseAllLocks(timestamp_t txn_ts, const WriteSetCallback &write_set_cb) override;
 
-  bool TryLockShared(timestamp_t txn_ts, const LockableTuple *key, PageLockTable *page_locks = nullptr) override;
+  bool TryLockShared(timestamp_t txn_ts, const LockableTuple *key, PageLockState *page_lock_state = nullptr) override;
   bool TryLock(timestamp_t txn_ts, timestamp_t undo_ts, std::span<u8> undo_payload, const LockableTuple *key,
-               PageLockTable *page_locks = nullptr) override;
+               PageLockState *page_lock_state = nullptr) override;
   
   /* Unreachable part. Locks are only released all at once, in ReleaseAllLocks() */
   void Unlock(timestamp_t txn_ts, const LockableTuple *key) override;

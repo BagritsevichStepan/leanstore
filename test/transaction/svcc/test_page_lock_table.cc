@@ -1,5 +1,5 @@
-#include "buffer/buffer_frame.h"
 #include "common/typedefs.h"
+#include "transaction/svcc/page_lock_state.h"
 #include "transaction/svcc/page_lock_table.h"
 
 #include "gtest/gtest.h"
@@ -42,11 +42,8 @@ TEST(LockStateTest, ExclusiveBlocksEveryoneElse) {
 }
 
 TEST(PageLockTableTest, OneStatePerKey) {
-  buffer::BufferFrame frame;
-  frame.Init();
-  EXPECT_EQ(frame.GetLockTable(), nullptr);
-  auto table = frame.GetOrCreateLockTable();
-  EXPECT_EQ(frame.GetOrCreateLockTable(), table);
+  PageLockTable table_obj;
+  auto table = &table_obj;
 
   auto k1 = Key({1, 2, 3});
   auto k2 = Key({1, 2, 4});
@@ -55,12 +52,10 @@ TEST(PageLockTableTest, OneStatePerKey) {
 }
 
 TEST(PageLockTableTest, SplitMovesUpperKeysAndKeepsAddresses) {
-  buffer::BufferFrame left_frame;
-  buffer::BufferFrame right_frame;
-  left_frame.Init();
-  right_frame.Init();
-  auto left  = left_frame.GetOrCreateLockTable();
-  auto right = right_frame.GetOrCreateLockTable();
+  PageLockTable left_table;
+  PageLockTable right_table;
+  auto left = &left_table;
+  auto right = &right_table;
 
   std::vector<std::vector<u8>> keys = {{1}, {2}, {3}, {3, 0}, {4}};
   std::vector<LockState *> states;
@@ -82,12 +77,10 @@ TEST(PageLockTableTest, SplitMovesUpperKeysAndKeepsAddresses) {
 }
 
 TEST(PageLockTableTest, MergeKeepsTheEntryOfTheCoveringLeaf) {
-  buffer::BufferFrame left_frame;
-  buffer::BufferFrame right_frame;
-  left_frame.Init();
-  right_frame.Init();
-  auto left  = left_frame.GetOrCreateLockTable();
-  auto right = right_frame.GetOrCreateLockTable();
+  PageLockTable left_table;
+  PageLockTable right_table;
+  auto left = &left_table;
+  auto right = &right_table;
 
   auto left_fence = Key({5});  // left covers <= 5, right covers > 5
   auto own_left   = Key({2});  // real in left, stale duplicate in right
@@ -117,18 +110,18 @@ TEST(PageLockTableTest, MergeKeepsTheEntryOfTheCoveringLeaf) {
 TEST(PageLockTableTest, ConcurrentGetOrCreateYieldsOneState) {
   static constexpr int NO_THREADS = 8;
   static constexpr int NO_KEYS    = 1000;
-  buffer::BufferFrame frame;
-  frame.Init();
+  PageLockState page;
 
   std::vector<std::vector<LockState *>> seen(NO_THREADS, std::vector<LockState *>(NO_KEYS));
   std::vector<std::thread> threads;
   for (int t = 0; t < NO_THREADS; t++) {
     threads.emplace_back([&, t]() {
-      auto table = frame.GetOrCreateLockTable();
       for (int k = 0; k < NO_KEYS; k++) {
         u8 key[sizeof(int)];
         std::memcpy(key, &k, sizeof(int));
-        seen[t][k] = table->GetOrCreate(key);
+        // The table itself is not thread-safe: every access goes through the latch of its PageLockState
+        auto guard = page.Lock();
+        seen[t][k] = guard.GetLockTable().GetOrCreate(key);
         EXPECT_TRUE(seen[t][k]->TryAcquireShared(t + 1));
       }
     });

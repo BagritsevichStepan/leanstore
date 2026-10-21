@@ -7,7 +7,7 @@
 #include "transaction/lockable_tuple.h"
 #include "transaction/cc_mode.h"
 #include "transaction/mvcc/lock_manager.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/page_lock_state.h"
 
 #include <stdexcept>
 #include <type_traits>
@@ -60,11 +60,23 @@ auto PageGuard<PageClass>::OwnTuple(leng_t tree_id, std::span<u8> key) -> bool {
 }
 
 template <class PageClass>
-auto PageGuard<PageClass>::GetPageLockTable() -> transaction::svcc::PageLockTable * {
+auto PageGuard<PageClass>::GetPageLockState() -> transaction::svcc::PageLockState * {
   if (!transaction::IsSvccInPageLock()) {
     return nullptr;
   }
-  return buffer_->BufferFramePage(page_id_).GetOrCreateLockTable();
+
+  // Lock state create for leaf pages
+  auto lock_state = buffer_->BufferFramePage(page_id_).lock_state.get();
+  if (lock_state == nullptr) {
+    // An optimistic traversal may read an inner node as a leaf: the validation of the node fails anyway
+    if (mode_ == GuardMode::OPTIMISTIC) {
+      throw RestartException();
+    }
+
+    UnreachableCode();
+  }
+  
+  return lock_state;
 }
 
 template <class PageClass>
@@ -74,7 +86,7 @@ auto PageGuard<PageClass>::TryLockShared(leng_t tree_id, std::span<u8> key) -> b
   if (txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
     LOCKABLE_TUPLE_STACK(lockable, key, tree_id);
     return (FLAGS_txn_mvcc && transaction::mvcc::LockManager::OwnTuple(lockable)) ||
-           txn.LockManager()->TryLockShared(txn.start_ts, lockable, GetPageLockTable());
+           txn.LockManager()->TryLockShared(txn.start_ts, lockable, GetPageLockState());
   }
   return true;
 }
@@ -86,7 +98,7 @@ auto PageGuard<PageClass>::TryLock(leng_t tree_id, timestamp_t tuple_ts, std::sp
   Ensure(txn.IsRunning());
   if (txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
     LOCKABLE_TUPLE_STACK(lockable, key, tree_id);
-    return txn.LockManager()->TryLock(txn.start_ts, tuple_ts, undo_payload, lockable, GetPageLockTable());
+    return txn.LockManager()->TryLock(txn.start_ts, tuple_ts, undo_payload, lockable, GetPageLockState());
   }
   return true;
 }

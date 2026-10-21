@@ -15,7 +15,7 @@
 namespace leanstore::transaction {
 
 namespace svcc {
-class PageLockTable;
+class PageLockState;
 }
 
 using WriteSetCallback = std::function<void(const LockableTuple *, timestamp_t, std::span<const u8>)>;
@@ -32,11 +32,12 @@ class ILockManager {
    * Try to acquire a shared (read) lock for a transaction
    * @param txn_ts Transaction timestamp (for MVCC/SVCC)
    * @param key Key to lock
-   * @param page_locks Lock table of the leaf covering the key. Only SVCC in-page locking uses it,
-   *                   the other implementations ignore it
+   * @param page_lock_state Lock state of the leaf covering the key.
+   *   Only SVCC in-page locking uses it, the other implementations ignore it
    * @return true if the lock can be acquired immediately, false if blocked
    */
-  virtual bool TryLockShared(timestamp_t txn_ts, const LockableTuple *, svcc::PageLockTable *page_locks = nullptr) = 0;
+  virtual bool TryLockShared(timestamp_t txn_ts, const LockableTuple *,
+                             svcc::PageLockState *page_lock_state = nullptr) = 0;
 
   /**
    * Try to acquire an exclusive (write) lock for a transaction
@@ -44,11 +45,11 @@ class ILockManager {
    * @param undo_ts The tuple's timestamp
    * @param undo_payload The prev payload, used for undo
    * @param key Key to lock
-   * @param page_locks Lock table of the leaf covering the key, see TryLockShared()
+   * @param page_lock_state Lock state of the leaf covering the key, see TryLockShared()
    * @return true if the lock can be acquired immediately, false if blocked
    */
   virtual bool TryLock(timestamp_t txn_ts, timestamp_t undo_ts, std::span<u8> undo_payload, const LockableTuple *,
-                       svcc::PageLockTable *page_locks = nullptr) = 0;
+                       svcc::PageLockState *page_lock_state = nullptr) = 0;
 
   /**
    * Release a previously acquired exclusive lock

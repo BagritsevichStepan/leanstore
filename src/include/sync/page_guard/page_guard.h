@@ -17,7 +17,7 @@ class BufferManager;
 }
 
 namespace leanstore::transaction::svcc {
-class PageLockTable;
+class PageLockState;
 }
 
 namespace leanstore::sync {
@@ -100,8 +100,8 @@ class PageGuard {
   void SubmitActiveWalEntry();
 
  protected:
-  /* Returns lock table of this page under SVCC in-page locking, nullptr under the other CC types */
-  auto GetPageLockTable() -> transaction::svcc::PageLockTable *;
+  /* Returns the lock state of this page under SVCC in-page locking, nullptr under the other CC types */
+  auto GetPageLockState() -> transaction::svcc::PageLockState *;
 
   buffer::BufferManager *buffer_;  // Buffer Manager
   pageid_t page_id_;               // The ID of the Page

@@ -61,6 +61,9 @@ class BTree : public KVInterface {
     -> std::pair<sync::OptimisticGuard<BTreeNode>, sync::OptimisticGuard<BTreeNode>>;
   auto FindLeafOptimistic(std::span<u8> key) -> sync::OptimisticGuard<BTreeNode>;
 
+  /* SVCC in-page locking: every leaf gets its PageLockState when it is created */
+  void InitLockState(pageid_t leaf_pid);
+
   /* Split/Merge utilities */
   void TrySplit(sync::ExclusiveGuard<BTreeNode> &&parent, sync::ExclusiveGuard<BTreeNode> &&node);
   void EnsureSpaceForSplit(BTreeNode *to_split, std::span<u8> key);

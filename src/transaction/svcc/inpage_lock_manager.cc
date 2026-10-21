@@ -35,10 +35,11 @@ void InPageLockManager::ReleaseAllLocks([[maybe_unused]] timestamp_t txn_ts, con
 }
 
 bool InPageLockManager::TryLockShared([[maybe_unused]] timestamp_t txn_ts, const LockableTuple *key,
-                                      PageLockTable *page_locks) {
-  Ensure(page_locks != nullptr);
+                                      PageLockState *page_lock_state) {
+  Ensure(page_lock_state != nullptr);
 
-  auto lock_state = page_locks->GetOrCreate(GetKeySpan(key));
+  auto guard = page_lock_state->Lock();
+  auto lock_state = guard.GetLockTable().GetOrCreate(GetKeySpan(key));
   if (read_set.contains(lock_state) || write_set.contains(lock_state)) {
     return true;
   }
@@ -52,10 +53,11 @@ bool InPageLockManager::TryLockShared([[maybe_unused]] timestamp_t txn_ts, const
 }
 
 bool InPageLockManager::TryLock([[maybe_unused]] timestamp_t txn_ts, [[maybe_unused]] timestamp_t undo_ts,
-                                std::span<u8> undo_payload, const LockableTuple *key, PageLockTable *page_locks) {
-  Ensure(page_locks != nullptr);
+                                std::span<u8> undo_payload, const LockableTuple *key, PageLockState *page_lock_state) {
+  Ensure(page_lock_state != nullptr);
 
-  auto lock_state = page_locks->GetOrCreate(GetKeySpan(key));
+  auto guard = page_lock_state->Lock();
+  auto lock_state = guard.GetLockTable().GetOrCreate(GetKeySpan(key));
   if (write_set.contains(lock_state)) {
     return true;
   }
