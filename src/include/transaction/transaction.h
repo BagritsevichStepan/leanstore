@@ -30,6 +30,9 @@ namespace leanstore::transaction {
 
 class TransactionManager;
 class ILockManager;
+namespace svcc {
+class InPageLockManager;
+}
 
 enum class IsolationLevel : u8 {
   READ_UNCOMMITTED = 0,
@@ -74,6 +77,7 @@ class Transaction {
   auto LogWorker() -> recovery::LogWorker &;
   auto BufferPool() -> buffer::BufferManager *;
   auto LockManager() -> transaction::ILockManager *;
+  auto InPageLockManager() -> transaction::svcc::InPageLockManager *;
 
   // Txn context - public interfaces
   auto TxnID() -> txnid_t { return start_ts; }

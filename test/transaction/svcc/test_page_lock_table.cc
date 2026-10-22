@@ -5,7 +5,7 @@
 #include "gtest/gtest.h"
 
 #include <cstring>
-#include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -16,10 +16,27 @@ static const ComparisonLambda CMP = {ComparisonOperator::MEMCMP, [](const void *
                                        return std::memcmp(a, b, len);
                                      }};
 
-static auto Key(std::vector<u8> &&bytes) -> std::vector<u8> { return std::move(bytes); }
+using Key = std::string;
+
+static auto AcquireShared(PageLockTable &table, const Key &key, wid_t worker_id) -> bool {
+  return table.TryAcquire(key, worker_id, false);
+}
+
+static auto AcquireExclusive(PageLockTable &table, const Key &key, wid_t worker_id, bool holds_shared) -> bool {
+  return table.TryAcquire(key, worker_id, true, holds_shared);
+}
+
+static void ReleaseShared(PageLockTable &table, const Key &key) {
+  table.Release(key, false);
+}
+
+static void ReleaseExclusive(PageLockTable &table, const Key &key) {
+  table.Release(key, true);
+}
 
 TEST(LockStateTest, SharedLocksAreCompatible) {
   LockState state;
+  EXPECT_TRUE(state.IsFree());
   EXPECT_TRUE(state.TryAcquireShared(1));
   EXPECT_TRUE(state.TryAcquireShared(2));
   EXPECT_FALSE(state.TryAcquireExclusive(3, false));
@@ -27,6 +44,8 @@ TEST(LockStateTest, SharedLocksAreCompatible) {
   EXPECT_FALSE(state.TryAcquireExclusive(1, true));
   state.ReleaseShared();
   EXPECT_TRUE(state.TryAcquireExclusive(1, true));
+  state.ReleaseExclusive();
+  EXPECT_TRUE(state.IsFree());
 }
 
 TEST(LockStateTest, ExclusiveBlocksEveryoneElse) {
@@ -41,99 +60,103 @@ TEST(LockStateTest, ExclusiveBlocksEveryoneElse) {
   EXPECT_TRUE(state.TryAcquireExclusive(2, false));
 }
 
-TEST(PageLockTableTest, OneStatePerKey) {
-  PageLockTable table_obj;
-  auto table = &table_obj;
+TEST(PageLockTableTest, OnlyHeldLocksStay) {
+  PageLockTable table;
+  Key k1 = {1, 2, 3};
+  Key k2 = {1, 2, 4};
 
-  auto k1 = Key({1, 2, 3});
-  auto k2 = Key({1, 2, 4});
-  EXPECT_EQ(table->GetOrCreate(k1), table->GetOrCreate(k1));
-  EXPECT_NE(table->GetOrCreate(k1), table->GetOrCreate(k2));
+  EXPECT_TRUE(AcquireShared(table, k1, 1));
+  EXPECT_TRUE(AcquireShared(table, k1, 2));
+  EXPECT_TRUE(AcquireExclusive(table, k2, 3, false));
+
+  // A failed acquisition of an existing lock leaves it as it is
+  EXPECT_FALSE(AcquireExclusive(table, k1, 4, false));
+  EXPECT_FALSE(AcquireShared(table, k2, 4));
+
+  ReleaseShared(table, k1);
+  ReleaseShared(table, k1);
+  EXPECT_FALSE(table.Empty());
+  ReleaseExclusive(table, k2);
+  EXPECT_TRUE(table.Empty());
 }
 
-TEST(PageLockTableTest, SplitMovesUpperKeysAndKeepsAddresses) {
-  PageLockTable left_table;
-  PageLockTable right_table;
-  auto left = &left_table;
-  auto right = &right_table;
-
-  std::vector<std::vector<u8>> keys = {{1}, {2}, {3}, {3, 0}, {4}};
-  std::vector<LockState *> states;
-  for (auto &k : keys) { states.push_back(left->GetOrCreate(k)); }
-  ASSERT_TRUE(states[4]->TryAcquireExclusive(7, false));
-
-  auto sep = Key({3});
-  left->MoveUpperRange(sep, CMP, *right);
-
-  // keys <= sep stay, keys > sep move -- as the very same objects
-  EXPECT_EQ(left->GetOrCreate(keys[0]), states[0]);
-  EXPECT_EQ(left->GetOrCreate(keys[2]), states[2]);
-  EXPECT_EQ(right->GetOrCreate(keys[3]), states[3]);
-  EXPECT_EQ(right->GetOrCreate(keys[4]), states[4]);
-  // The lock moved with its key
-  EXPECT_FALSE(right->GetOrCreate(keys[4])->TryAcquireShared(8));
-  // The left table forgot the moved keys
-  EXPECT_NE(left->GetOrCreate(keys[4]), states[4]);
+TEST(PageLockTableTest, Upgrade) {
+  PageLockTable table;
+  Key k = {5};
+  EXPECT_TRUE(AcquireShared(table, k, 1));
+  EXPECT_TRUE(AcquireExclusive(table, k, 1, true));
+  EXPECT_FALSE(AcquireShared(table, k, 2));
+  ReleaseExclusive(table, k);
+  EXPECT_TRUE(table.Empty());
 }
 
-TEST(PageLockTableTest, MergeKeepsTheEntryOfTheCoveringLeaf) {
-  PageLockTable left_table;
-  PageLockTable right_table;
-  auto left = &left_table;
-  auto right = &right_table;
+TEST(PageLockTableTest, SplitMovesUpperKeys) {
+  PageLockTable left;
+  PageLockTable right;
 
-  auto left_fence = Key({5});  // left covers <= 5, right covers > 5
-  auto own_left   = Key({2});  // real in left, stale duplicate in right
-  auto own_right  = Key({8});  // stale duplicate in left, real in right
-  auto only_left  = Key({3});
+  std::vector<Key> keys = {{1}, {2}, {3}, {3, 0}, {4}};
+  for (auto &k : keys) {
+    ASSERT_TRUE(AcquireShared(left, k, 1));
+  }
+  ASSERT_TRUE(AcquireExclusive(left, keys[4], 1, true));
 
-  auto real_left  = left->GetOrCreate(own_left);
-  auto stale_left = left->GetOrCreate(own_right);
-  auto plain_left = left->GetOrCreate(only_left);
-  auto stale_right = right->GetOrCreate(own_left);
-  auto real_right  = right->GetOrCreate(own_right);
-  ASSERT_TRUE(real_left->TryAcquireExclusive(1, false));
-  ASSERT_TRUE(real_right->TryAcquireExclusive(2, false));
+  left.MoveUpperRange(Key{3}, CMP, right);
 
-  left->MergeInto(*right, left_fence, CMP);
-
-  EXPECT_EQ(right->GetOrCreate(own_left), real_left);
-  EXPECT_EQ(right->GetOrCreate(own_right), real_right);
-  EXPECT_EQ(right->GetOrCreate(only_left), plain_left);
-  EXPECT_NE(right->GetOrCreate(own_left), stale_right);
-  EXPECT_NE(right->GetOrCreate(own_right), stale_left);
-  // Buried states stay valid: their holders still release them through the pointer
-  EXPECT_TRUE(stale_left->TryAcquireShared(3));
-  stale_left->ReleaseShared();
+  // keys > separator moved with their state: they are held in `right` now
+  EXPECT_FALSE(AcquireShared(right, keys[4], 2));
+  ReleaseExclusive(right, keys[4]);
+  ReleaseShared(right, keys[3]);
+  EXPECT_TRUE(right.Empty());
+  // keys <= separator stayed
+  for (auto idx = 0; idx < 3; idx++) {
+    ReleaseShared(left, keys[idx]);
+  }
+  EXPECT_TRUE(left.Empty());
 }
 
-TEST(PageLockTableTest, ConcurrentGetOrCreateYieldsOneState) {
+TEST(PageLockTableTest, MergeMovesEverything) {
+  PageLockTable left;
+  PageLockTable right;
+  Key l = {2};
+  Key r = {8};
+  ASSERT_TRUE(AcquireExclusive(left, l, 1, false));
+  ASSERT_TRUE(AcquireShared(right, r, 2));
+
+  left.MergeInto(right);
+
+  EXPECT_TRUE(left.Empty());
+  EXPECT_FALSE(AcquireShared(right, l, 3));
+  ReleaseExclusive(right, l);
+  ReleaseShared(right, r);
+  EXPECT_TRUE(right.Empty());
+}
+
+TEST(PageLockStateTest, ConcurrentSharedLocks) {
   static constexpr int NO_THREADS = 8;
-  static constexpr int NO_KEYS    = 1000;
+  static constexpr int NO_KEYS = 1000;
   PageLockState page;
 
-  std::vector<std::vector<LockState *>> seen(NO_THREADS, std::vector<LockState *>(NO_KEYS));
   std::vector<std::thread> threads;
   for (int t = 0; t < NO_THREADS; t++) {
     threads.emplace_back([&, t]() {
       for (int k = 0; k < NO_KEYS; k++) {
-        u8 key[sizeof(int)];
-        std::memcpy(key, &k, sizeof(int));
+        Key key(sizeof(int), 0);
+        std::memcpy(key.data(), &k, sizeof(int));
         // The table itself is not thread-safe: every access goes through the latch of its PageLockState
         auto guard = page.Lock();
-        seen[t][k] = guard.GetLockTable().GetOrCreate(key);
-        EXPECT_TRUE(seen[t][k]->TryAcquireShared(t + 1));
+        EXPECT_TRUE(AcquireShared(guard.GetLockTable(), key, t));
       }
     });
   }
-  for (auto &th : threads) { th.join(); }
-
-  std::set<LockState *> distinct;
-  for (int k = 0; k < NO_KEYS; k++) {
-    for (int t = 1; t < NO_THREADS; t++) { EXPECT_EQ(seen[t][k], seen[0][k]); }
-    distinct.insert(seen[0][k]);
-    // every thread holds a shared lock, an exclusive one can't be granted
-    EXPECT_FALSE(seen[0][k]->TryAcquireExclusive(NO_THREADS + 1, false));
+  for (auto &th : threads) {
+    th.join();
   }
-  EXPECT_EQ(distinct.size(), static_cast<size_t>(NO_KEYS));
+
+  // Every thread holds a shared lock on every key: an exclusive one can't be granted
+  auto guard = page.Lock();
+  for (int k = 0; k < NO_KEYS; k++) {
+    Key key(sizeof(int), 0);
+    std::memcpy(key.data(), &k, sizeof(int));
+    EXPECT_FALSE(AcquireExclusive(guard.GetLockTable(), key, NO_THREADS + 1, false));
+  }
 }

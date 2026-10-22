@@ -235,6 +235,10 @@ auto BufferManager::PageIsDirty(pageid_t page_id) -> bool {
 
 auto BufferManager::BufferFramePage(pageid_t page_id) -> buffer::BufferFrame & { return frame_[page_id]; }
 
+auto BufferManager::EvictedLocks() -> transaction::svcc::EvictedLockStore & {
+  return evicted_locks_;
+}
+
 /**
  * @brief Chunk operation to simulate overheads of normal Buffer Manager
  */

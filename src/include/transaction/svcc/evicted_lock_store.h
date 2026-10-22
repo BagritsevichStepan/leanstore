@@ -1,12 +1,10 @@
 #pragma once
 
-#include "common/exceptions.h"
 #include "common/typedefs.h"
-#include "sync/hybrid_guard.h"
 #include "sync/hybrid_latch.h"
 #include "transaction/svcc/page_lock_table.h"
 
-#include <span>
+#include <string_view>
 #include <unordered_map>
 
 namespace leanstore::transaction::svcc {
@@ -28,28 +26,12 @@ class EvictedLockStore {
   // Restore of page
   void Restore(pageid_t pid, PageLockTable &table);
 
-  /* Applies update_lock() to the lock of (pid, key) of the evicted page `pid`. The lock must be in the store */
-  template <typename UpdateLockFn>
-  void UpdateLockState(pageid_t pid, std::span<const u8> key, UpdateLockFn &&update_lock);
+  /* Releases the lock of (pid, key) of the evicted page pid, which must be in the store; erases it once free */
+  void Release(pageid_t pid, std::string_view key, bool exclusive);
 
  private:
   sync::HybridLatch latch_;
   std::unordered_map<pageid_t, PageLockTable> pages_;  // only pages with locks
 };
-
-// Implementation
-template <typename UpdateLockFn>
-void EvictedLockStore::UpdateLockState(pageid_t pid, std::span<const u8> key, UpdateLockFn &&update_lock) {
-  sync::HybridGuard guard(&latch_, sync::GuardMode::EXCLUSIVE);
-
-  auto page_iterator = pages_.find(pid);
-  Ensure(page_iterator != pages_.end());
-
-  auto& page_lock_table = page_iterator->second;
-  page_lock_table.UpdateLockState(key, update_lock);
-  if (page_lock_table.Empty()) {
-    pages_.erase(page_iterator);
-  }
-}
 
 }  // namespace leanstore::transaction::svcc

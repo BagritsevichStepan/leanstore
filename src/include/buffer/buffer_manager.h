@@ -9,6 +9,7 @@
 #include "storage/free_storage.h"
 #include "storage/page.h"
 #include "sync/page_state.h"
+#include "transaction/svcc/evicted_lock_store.h"
 
 #include "gtest/gtest_prod.h"
 
@@ -58,6 +59,7 @@ class BufferManager {
   auto IsExtent(pageid_t page_id) -> bool;
   auto PageIsDirty(pageid_t page_id) -> bool;
   auto BufferFramePage(pageid_t page_id) -> buffer::BufferFrame &;
+  auto EvictedLocks() -> transaction::svcc::EvictedLockStore &;
   void ChunkOperation(pageid_t start_pid, u64 no_bytes, const std::function<void(u64, std::span<u8>)> &func);
 
   // Main page life-cycle
@@ -138,6 +140,9 @@ class BufferManager {
   /* Extent management */
   u64 extent_virtual_size_; /* Total size of the extent buffer manager, similar to virtual_size_ */
   u64 extent_virtual_cnt_;  /* Total page cnt of the extent buffer manager, similar to virtual_cnt_ */
+
+  /* SVCC in-page locking: the locks of evicted pages */
+  transaction::svcc::EvictedLockStore evicted_locks_;
 };
 
 }  // namespace leanstore::buffer

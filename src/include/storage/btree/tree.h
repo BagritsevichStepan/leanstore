@@ -14,6 +14,7 @@
 #include <cstring>
 #include <functional>
 #include <span>
+#include <string_view>
 #include <utility>
 
 namespace leanstore::storage {
@@ -49,6 +50,13 @@ class BTree : public KVInterface {
   auto GetTimestamp(std::span<u8> key) -> timestamp_t;
   void UpdateTimestamp(std::span<u8> key, timestamp_t commit_ts);
 
+  /**
+   * SVCC in-page locking: release a lock the running transaction holds on `key`.
+   * `leaf_hint` is the leaf the lock was acquired on. The key may have moved to another leaf since then,
+   * and the leaf holding it now may be evicted: its locks are in the EvictedLockStore then, the leaf is not loaded
+   */
+  void ReleaseInPageLock(std::string_view key, pageid_t leaf_hint, bool exclusive);
+
  private:
   /* Iterate all pages utilities */
   auto IterateAllNodes(sync::OptimisticGuard<BTreeNode> &node, const std::function<u64(BTreeNode &)> &inner_fn,
@@ -61,7 +69,8 @@ class BTree : public KVInterface {
     -> std::pair<sync::OptimisticGuard<BTreeNode>, sync::OptimisticGuard<BTreeNode>>;
   auto FindLeafOptimistic(std::span<u8> key) -> sync::OptimisticGuard<BTreeNode>;
 
-  /* SVCC in-page locking: every leaf gets its PageLockState when it is created */
+  /* SVCC in-page locking utilities */
+  /* Initialize the PageLockState for a leaf when it is created */
   void InitLockState(pageid_t leaf_pid);
 
   /* Split/Merge utilities */

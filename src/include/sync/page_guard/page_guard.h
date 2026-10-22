@@ -16,10 +16,6 @@ namespace leanstore::buffer {
 class BufferManager;
 }
 
-namespace leanstore::transaction::svcc {
-class PageLockState;
-}
-
 namespace leanstore::sync {
 
 template <class PageClass>
@@ -42,6 +38,9 @@ class PageGuard {
   auto Ptr() -> PageClass *;
   auto PageID() -> pageid_t;
   auto GSN() -> timestamp_t;
+
+  /* Throws RestartException if the page may have changed since the guard was taken, never waits */
+  virtual void ValidateOrRestart(bool auto_moved = true);
 
   // Transaction utilities
   auto OwnTuple(leng_t tree_id, std::span<u8> key) -> bool;
@@ -100,8 +99,9 @@ class PageGuard {
   void SubmitActiveWalEntry();
 
  protected:
-  /* Returns the lock state of this page under SVCC in-page locking, nullptr under the other CC types */
-  auto GetPageLockState() -> transaction::svcc::PageLockState *;
+  /* SVCC in-page locking: runs lock() on the latched lock table of this page */
+  template <typename LockFn>
+  auto LockInPage(LockFn &&lock) -> bool;
 
   buffer::BufferManager *buffer_;  // Buffer Manager
   pageid_t page_id_;               // The ID of the Page

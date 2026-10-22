@@ -20,7 +20,7 @@ class OptimisticGuard : public PageGuard<PageClass> {
   OptimisticGuard(buffer::BufferManager *buffer, pageid_t pid, OptimisticGuard<PageClass2> &parent);
 
   void Init();
-  void ValidateOrRestart(bool auto_moved = true);
+  void ValidateOrRestart(bool auto_moved = true) override;
 
  protected:
   friend class SharedGuard<PageClass>;

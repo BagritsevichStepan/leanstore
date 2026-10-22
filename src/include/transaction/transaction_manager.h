@@ -5,6 +5,7 @@
 #include "recovery/log_manager.h"
 #include "transaction/lock_manager_interface.h"
 #include "transaction/mvcc/version_manager.h"
+#include "transaction/svcc/inpage_lock_manager.h"
 #include "transaction/transaction.h"
 
 #include <atomic>
@@ -38,10 +39,14 @@ class TransactionManager {
   friend class LeanStore;
   friend class Transaction;
   void QueueTransaction(Transaction &txn);
+  
+  auto EmptyLockManagerLocalSet() -> bool;
 
   buffer::BufferManager *buffer_;
   recovery::LogManager *log_manager_;
+  // Exactly one of the two is set: lock_manager_ for MVCC / SVCC, inpage_lock_manager_ for SVCC in-page locking
   std::unique_ptr<ILockManager> lock_manager_;
+  std::unique_ptr<svcc::InPageLockManager> inpage_lock_manager_;
   std::unique_ptr<mvcc::VersionManager> version_manager_ = nullptr;
   std::thread background_version_gc_;
 };

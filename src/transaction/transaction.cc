@@ -53,6 +53,10 @@ auto Transaction::BufferPool() -> buffer::BufferManager * { return manager_->buf
 
 auto Transaction::LockManager() -> transaction::ILockManager * { return manager_->lock_manager_.get(); }
 
+auto Transaction::InPageLockManager() -> transaction::svcc::InPageLockManager * {
+  return manager_->inpage_lock_manager_.get();
+}
+
 auto Transaction::LookupVersionChain(const LockableTuple *key, const AccessPayloadFunc &read_cb,
                                      timestamp_t &out_tuple_ts) -> bool {
   Ensure(FLAGS_txn_mvcc);

@@ -4,87 +4,72 @@
 
 namespace leanstore::transaction::svcc {
 
-namespace {
+thread_local InPageLockManager::ReadSet InPageLockManager::read_set;
+thread_local InPageLockManager::WriteSet InPageLockManager::write_set;
 
-auto GetKeySpan(const LockableTuple *key) -> std::span<const u8> {
-  return {key->key, key->key_len};
-}
-
-} // namespace
-
-thread_local std::unordered_set<LockState *> InPageLockManager::read_set;
-thread_local std::unordered_map<LockState *, InPageLockManager::WriteEntry> InPageLockManager::write_set;
-
-bool InPageLockManager::EmptyLocalSet() {
+auto InPageLockManager::EmptyLocalSet() -> bool {
   return read_set.empty() && write_set.empty();
 }
 
-void InPageLockManager::ReleaseAllLocks([[maybe_unused]] timestamp_t txn_ts, const WriteSetCallback &write_set_cb) {
-  for (auto state : read_set) {
-    state->ReleaseShared();
+void InPageLockManager::ReleaseAllLocks(const UndoCallback &undo_cb, const ReleaseLockCallback &release_lock_cb) {
+  for (auto &[tuple, leaf] : read_set) {
+    release_lock_cb(tuple, leaf, false);
   }
-  read_set.clear();
 
-  std::erase_if(write_set, [&](auto &write_set_entry) {
-    auto &[lock_state, entry] = write_set_entry;
-    write_set_cb(entry.tuple, INVALID_TS, std::span<const u8>(entry.undo_payload));
-    lock_state->ReleaseExclusive();
-    LockableTuple::Release(entry.tuple);
-    return true;
-  });
+  // The undo (abort) runs while the key is still in the write set: it re-locks its own key
+  for (auto &[tuple, entry] : write_set) {
+    undo_cb(tuple, std::span<const u8>(entry.undo_payload));
+    release_lock_cb(tuple, entry.leaf, true);
+  }
+
+  auto release_tuples = [](auto &set) {
+    for (auto &entry : set) {
+      LockableTuple::Release(entry.first);
+    }
+    set.clear();
+  };
+
+  release_tuples(read_set);
+  release_tuples(write_set);
 }
 
-bool InPageLockManager::TryLockShared([[maybe_unused]] timestamp_t txn_ts, const LockableTuple *key,
-                                      PageLockState *page_lock_state) {
-  Ensure(page_lock_state != nullptr);
-
-  auto guard = page_lock_state->Lock();
-  auto lock_state = guard.GetLockTable().GetOrCreate(GetKeySpan(key));
-  if (read_set.contains(lock_state) || write_set.contains(lock_state)) {
+auto InPageLockManager::TryLockShared(const LockableTuple *key, PageLockTable &page_lock_table, pageid_t page_id)
+  -> bool {
+  if (read_set.contains(key) || write_set.contains(key)) {
     return true;
   }
 
-  if (!lock_state->TryAcquireShared(LeanStore::worker_thread_id)) {
+  if (!page_lock_table.TryAcquire(key->KeyView(), LeanStore::worker_thread_id, false)) {
     return false;
   }
 
-  read_set.insert(lock_state);
+  read_set.emplace(LockableTuple::Constructor(*key), page_id);
   return true;
 }
 
-bool InPageLockManager::TryLock([[maybe_unused]] timestamp_t txn_ts, [[maybe_unused]] timestamp_t undo_ts,
-                                std::span<u8> undo_payload, const LockableTuple *key, PageLockState *page_lock_state) {
-  Ensure(page_lock_state != nullptr);
-
-  auto guard = page_lock_state->Lock();
-  auto lock_state = guard.GetLockTable().GetOrCreate(GetKeySpan(key));
-  if (write_set.contains(lock_state)) {
+auto InPageLockManager::TryLock(std::span<u8> undo_payload, const LockableTuple *key, PageLockTable &page_lock_table,
+                                pageid_t page_id) -> bool {
+  if (write_set.contains(key)) {
     return true;
   }
 
   // Upgrade if we already hold a shared lock on this key
-  auto it = read_set.find(lock_state);
-  const bool holds_shared = (it != read_set.end());
-  if (!lock_state->TryAcquireExclusive(LeanStore::worker_thread_id, holds_shared)) {
+  auto shared_lock_it = read_set.find(key);
+  const bool holds_shared = (shared_lock_it != read_set.end());
+  if (!page_lock_table.TryAcquire(key->KeyView(), LeanStore::worker_thread_id, true, holds_shared)) {
     return false;
   }
 
+  LockableTuple *own_tuple;
   if (holds_shared) {
-    read_set.erase(it);
+    own_tuple = shared_lock_it->first;
+    read_set.erase(shared_lock_it);
+  } else {
+    own_tuple = LockableTuple::Constructor(*key);
   }
 
-  write_set.emplace(lock_state, WriteEntry{LockableTuple::Constructor(*key),
-                                           std::vector<u8>(undo_payload.begin(), undo_payload.end())});
-  
+  write_set.emplace(own_tuple, WriteEntry{page_id, std::vector<u8>(undo_payload.begin(), undo_payload.end())});
   return true;
-}
-
-void InPageLockManager::Unlock([[maybe_unused]] timestamp_t txn_ts, [[maybe_unused]] const LockableTuple *key) {
-  UnreachableCode();
-}
-
-void InPageLockManager::UnlockShared([[maybe_unused]] timestamp_t txn_ts, [[maybe_unused]] const LockableTuple *key) {
-  UnreachableCode();
 }
 
 }  // namespace leanstore::transaction::svcc

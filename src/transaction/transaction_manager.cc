@@ -22,6 +22,25 @@ using DataEntry  = leanstore::recovery::DataEntry;
 
 namespace leanstore::transaction {
 
+namespace {
+
+/* SVCC in-page locking: the lock lives in the leaf covering the key (or in the EvictedLockStore) */
+void ReleaseInPageLock(const LockableTuple *tuple, pageid_t leaf_hint, bool exclusive) {
+  auto index = reinterpret_cast<storage::BTree *>(catalog[tuple->tree_id]);
+  index->ReleaseInPageLock(tuple->KeyView(), leaf_hint, exclusive);
+}
+
+/* Undo a write: re-install the previous payload, or remove the key if it did not exist */
+void UndoWrite(const LockableTuple *tuple, std::span<const u8> payload) {
+  auto index = reinterpret_cast<storage::BTree *>(catalog[tuple->tree_id]);
+  [[maybe_unused]] auto ret = (payload.empty())
+                                ? index->Remove({const_cast<u8 *>(tuple->key), tuple->key_len})
+                                : index->Upsert({const_cast<u8 *>(tuple->key), tuple->key_len}, payload);
+  assert(ret == OpResult::OK);
+}
+
+} // namespace
+
 thread_local timestamp_t TransactionManager::previous_completed_time = 0;
 
 TransactionManager::TransactionManager(buffer::BufferManager *buffer_manager, LogManager *log_manager,
@@ -42,7 +61,7 @@ TransactionManager::TransactionManager(buffer::BufferManager *buffer_manager, Lo
     lock_manager_          = std::make_unique<svcc::LockManager>();
     background_version_gc_ = std::thread();
   } else {
-    lock_manager_          = std::make_unique<svcc::InPageLockManager>();
+    inpage_lock_manager_   = std::make_unique<svcc::InPageLockManager>();
     background_version_gc_ = std::thread();
   }
 };
@@ -91,14 +110,18 @@ void TransactionManager::CommitTransaction() {
   // Assign timestamp and Release locks according to Concurrency Control
   txn.commit_ts = global_clock++;
   if (txn.iso_level > IsolationLevel::READ_UNCOMMITTED) {
-    lock_manager_->ReleaseAllLocks(txn.start_ts, [&](const LockableTuple *tuple, timestamp_t, std::span<const u8>) {
-      // This lambda -- Updating tuple's TS -- will only be triggered by MVCC impl
-      if (FLAGS_txn_mvcc) {
-        auto index = reinterpret_cast<storage::BTree *>(catalog[tuple->tree_id]);
-        index->UpdateTimestamp({const_cast<u8 *>(tuple->key), tuple->key_len}, txn.commit_ts);
-      }
-    });
-    assert(lock_manager_->EmptyLocalSet());
+    if (inpage_lock_manager_ != nullptr) {
+      inpage_lock_manager_->ReleaseAllLocks([](const LockableTuple *, std::span<const u8>) {}, ReleaseInPageLock);
+    } else {
+      lock_manager_->ReleaseAllLocks(txn.start_ts, [&](const LockableTuple *tuple, timestamp_t, std::span<const u8>) {
+        // This lambda -- Updating tuple's TS -- will only be triggered by MVCC impl
+        if (FLAGS_txn_mvcc) {
+          auto index = reinterpret_cast<storage::BTree *>(catalog[tuple->tree_id]);
+          index->UpdateTimestamp({const_cast<u8 *>(tuple->key), tuple->key_len}, txn.commit_ts);
+        }
+      });
+    }
+    assert(EmptyLockManagerLocalSet());
   }
 
   // Update transactional context of current txn
@@ -135,6 +158,13 @@ void TransactionManager::CommitTransaction() {
   if (FLAGS_txn_mvcc) { version_manager_->AdvanceLocalTimestamp(LeanStore::worker_thread_id, txn.commit_ts); }
 }
 
+auto TransactionManager::EmptyLockManagerLocalSet() -> bool {
+  if (inpage_lock_manager_ != nullptr) {
+    return inpage_lock_manager_->EmptyLocalSet();
+  }
+  return lock_manager_->EmptyLocalSet();
+}
+
 auto TransactionManager::ValidateReadSet() -> bool {
   auto &txn = Transaction::active_txn;
 
@@ -162,18 +192,18 @@ void TransactionManager::AbortTransaction() {
   // Otherwise, call tree update
   txn.commit_ts = global_clock++;
   if (txn.iso_level > IsolationLevel::READ_UNCOMMITTED) {
-    lock_manager_->ReleaseAllLocks(
-      txn.start_ts, [&](const LockableTuple *tuple, auto undo_ts, std::span<const u8> payload) {
-        // This lambda -- Updating tuple's TS -- will only be triggered by MVCC impl
-        auto index                        = reinterpret_cast<storage::BTree *>(catalog[tuple->tree_id]);
-        Transaction::TUPLE_UNDO_TIMESTAMP = undo_ts;
-        [[maybe_unused]] auto ret         = (payload.empty())
-                                              ? index->Remove({const_cast<u8 *>(tuple->key), tuple->key_len})
-                                              : index->Upsert({const_cast<u8 *>(tuple->key), tuple->key_len}, payload);
-        assert(ret == OpResult::OK);
-      });
+    if (inpage_lock_manager_ != nullptr) {
+      inpage_lock_manager_->ReleaseAllLocks(UndoWrite, ReleaseInPageLock);
+    } else {
+      lock_manager_->ReleaseAllLocks(
+        txn.start_ts, [](const LockableTuple *tuple, timestamp_t undo_ts, std::span<const u8> payload) {
+          // undo_ts is only used by MVCC, SVCC passes INVALID_TS
+          Transaction::TUPLE_UNDO_TIMESTAMP = undo_ts;
+          UndoWrite(tuple, payload);
+        });
+    }
   }
-  assert(lock_manager_->EmptyLocalSet());
+  assert(EmptyLockManagerLocalSet());
 
   // TODO(XXX): To fully support recovery, need to generate CLRs (compensation log record) here
   // before generating TX_ABORT log entry

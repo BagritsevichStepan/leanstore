@@ -11,6 +11,7 @@
 #include <set>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 
 namespace leanstore::transaction {
@@ -23,6 +24,10 @@ struct LockableTuple {
   u8 key[];  // Key as byte array
 
   LockableTuple(std::span<u8> key_span, u64 tree_id) = delete;
+
+  auto KeyView() const -> std::string_view {
+    return {reinterpret_cast<const char *>(key), key_len};
+  }
 
   static auto Constructor(std::span<u8> key_span, u64 tree_id) -> LockableTuple * {
     size_t total_size = sizeof(LockableTuple) + key_span.size() * sizeof(u8);
@@ -71,11 +76,16 @@ struct LockableTuple {
     bool equal(const LockableTuple *a, const LockableTuple *b) const { return LockableTuple::EqualCore(a, b); }
   };
 
+  // Transparent: the sets keyed by `LockableTuple *` can be searched by `const LockableTuple *`
   struct HashPtr {
+    using is_transparent = void;
+
     size_t operator()(const LockableTuple *ptr) const { return LockableTuple::HashCore(ptr); }
   };
 
   struct EqualPtr {
+    using is_transparent = void;
+
     bool operator()(const LockableTuple *a, const LockableTuple *b) const { return LockableTuple::EqualCore(a, b); }
   };
 };

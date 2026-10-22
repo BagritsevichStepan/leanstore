@@ -152,7 +152,8 @@ void BTree::TrySplit(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
     if (IsSvccInPageLock() && !node_is_inner) {
       auto left_locks = buffer_->BufferFramePage(node.PageID()).lock_state->Lock();
       auto right_locks = buffer_->BufferFramePage(new_child.PageID()).lock_state->Lock();
-      left_locks.GetLockTable().MoveUpperRange({sep_key, sep_info.len}, cmp_lambda_, right_locks.GetLockTable());
+      auto separator_as_sv = std::string_view(reinterpret_cast<const char *>(sep_key), sep_info.len);
+      left_locks.GetLockTable().MoveUpperRange(separator_as_sv, cmp_lambda_, right_locks.GetLockTable());
     }
     
     // -------------------------------------------------------------------------------------
@@ -222,7 +223,7 @@ void BTree::TryMerge(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
     if (IsSvccInPageLock() && !right->IsInner()) {
       auto left_locks = buffer_->BufferFramePage(left.PageID()).lock_state->Lock();
       auto right_locks = buffer_->BufferFramePage(right.PageID()).lock_state->Lock();
-      left_locks.GetLockTable().MergeInto(right_locks.GetLockTable(), left->GetUpperFence(), cmp_lambda_);
+      left_locks.GetLockTable().MergeInto(right_locks.GetLockTable());
       left_locks.Retire();
     }
     // TODO(XXX): Free page left.PageID()
@@ -718,6 +719,54 @@ void BTree::UpdateTimestamp(std::span<u8> key, timestamp_t commit_ts) {
         node_locked->UpdateTimestamp(pos, commit_ts);
       }
       return;
+    } catch (const sync::RestartException &) {}
+  }
+}
+
+void BTree::ReleaseInPageLock(std::string_view key, pageid_t leaf_hint, bool exclusive) {
+  // 1. Fast path: the lock is still in the table of the hint leaf. A held lock is in exactly one table,
+  // so finding the key there means it is ours. Absent => split/merge/eviction moved it away
+  auto hint_lock_state = buffer_->BufferFramePage(leaf_hint).lock_state.get();
+  Ensure(hint_lock_state != nullptr);
+  
+  {
+    auto guard = hint_lock_state->Lock();
+    if (guard.GetState() == PageLockState::State::IN_MEMORY && guard.GetLockTable().TryRelease(key, exclusive)) {
+      return;
+    }
+  }
+
+  // 2. Slow path: descend by key
+  auto search_key = std::span<u8>(reinterpret_cast<u8 *>(const_cast<char *>(key.data())), key.size());
+  while (true) {
+    try {
+      OptimisticGuard<BTreeNode> parent(buffer_, METADATA_PAGE_ID);
+      auto child = reinterpret_cast<MetadataPage *>(parent.Ptr())->GetRoot(metadata_slotid_);
+      while (true) {
+        // `child` was read from a consistent parent
+        parent.ValidateOrRestart(false);
+
+        auto lock_state = buffer_->BufferFramePage(child).lock_state.get();
+        if (lock_state == nullptr) {
+          // An inner node
+          OptimisticGuard<BTreeNode> node(buffer_, child, parent);
+          child = node->FindChild(search_key, cmp_lambda_);
+          parent = std::move(node);
+          continue;
+        }
+
+        // A leaf: unchanged parent => no split/merge moved the key away from it since `child` was read,
+        // and they can't do it now: they need the latch of its lock state
+        auto guard = lock_state->Lock();
+        parent.ValidateOrRestart(true);
+        if (guard.GetState() == PageLockState::State::IN_MEMORY) {
+          guard.GetLockTable().Release(key, exclusive);
+        } else {
+          Ensure(guard.GetState() == PageLockState::State::EVICTED);
+          buffer_->EvictedLocks().Release(child, key, exclusive);
+        }
+        return;
+      }
     } catch (const sync::RestartException &) {}
   }
 }

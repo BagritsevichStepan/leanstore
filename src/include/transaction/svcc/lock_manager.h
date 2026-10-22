@@ -34,10 +34,8 @@ class LockManager : public ILockManager {
   void ReleaseAllLocks(timestamp_t txn_ts, const WriteSetCallback &write_set_cb) override;
 
   // Lock APIs
-  bool TryLockShared(timestamp_t txn_ts, const LockableTuple *,
-                     svcc::PageLockState *page_lock_state = nullptr) override;
-  bool TryLock(timestamp_t txn_ts, timestamp_t undo_ts, std::span<u8> undo_payload, const LockableTuple *,
-               svcc::PageLockState *page_lock_state = nullptr) override;
+  bool TryLockShared(timestamp_t txn_ts, const LockableTuple *) override;
+  bool TryLock(timestamp_t txn_ts, timestamp_t undo_ts, std::span<u8> undo_payload, const LockableTuple *) override;
   void Unlock(timestamp_t txn_ts, const LockableTuple *) override;
   void UnlockShared(timestamp_t txn_ts, const LockableTuple *) override;
 

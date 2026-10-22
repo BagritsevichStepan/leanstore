@@ -7,7 +7,9 @@
 #include "transaction/lockable_tuple.h"
 #include "transaction/cc_mode.h"
 #include "transaction/mvcc/lock_manager.h"
+#include "transaction/svcc/inpage_lock_manager.h"
 #include "transaction/svcc/page_lock_state.h"
+#include "transaction/svcc/page_lock_table.h"
 
 #include <stdexcept>
 #include <type_traits>
@@ -60,23 +62,28 @@ auto PageGuard<PageClass>::OwnTuple(leng_t tree_id, std::span<u8> key) -> bool {
 }
 
 template <class PageClass>
-auto PageGuard<PageClass>::GetPageLockState() -> transaction::svcc::PageLockState * {
-  if (!transaction::IsSvccInPageLock()) {
-    return nullptr;
-  }
+void PageGuard<PageClass>::ValidateOrRestart([[maybe_unused]] bool auto_moved) {}
 
-  // Lock state create for leaf pages
+/**
+ * The lock is taken in the table of this page only if the page did not change since the guard was taken,
+ * i.e. the page is still the leaf covering the key. The validation runs under the latch of the page's lock state:
+ * whatever moves these locks later (split, merge, eviction) takes the same latch, hence sees the new lock.
+ * It never waits: these operations take an X-latch on the page first, then wait for the latch of the lock state
+ */
+template <class PageClass>
+template <typename LockFn>
+auto PageGuard<PageClass>::LockInPage(LockFn &&lock) -> bool {
   auto lock_state = buffer_->BufferFramePage(page_id_).lock_state.get();
-  if (lock_state == nullptr) {
-    // An optimistic traversal may read an inner node as a leaf: the validation of the node fails anyway
-    if (mode_ == GuardMode::OPTIMISTIC) {
-      throw RestartException();
-    }
 
+  if (lock_state == nullptr) {
+    // Only leaves hold locks: an optimistic traversal read an inner node as a leaf, its validation fails
+    ValidateOrRestart(false);
     UnreachableCode();
   }
-  
-  return lock_state;
+
+  auto guard = lock_state->Lock();
+  ValidateOrRestart(false);
+  return lock(guard.GetLockTable());
 }
 
 template <class PageClass>
@@ -85,8 +92,17 @@ auto PageGuard<PageClass>::TryLockShared(leng_t tree_id, std::span<u8> key) -> b
   Ensure(txn.IsRunning());
   if (txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
     LOCKABLE_TUPLE_STACK(lockable, key, tree_id);
-    return (FLAGS_txn_mvcc && transaction::mvcc::LockManager::OwnTuple(lockable)) ||
-           txn.LockManager()->TryLockShared(txn.start_ts, lockable, GetPageLockState());
+    if (FLAGS_txn_mvcc && transaction::mvcc::LockManager::OwnTuple(lockable)) {
+      return true;
+    }
+
+    if (transaction::IsSvccInPageLock()) {
+      return LockInPage([&](transaction::svcc::PageLockTable &table) {
+        return txn.InPageLockManager()->TryLockShared(lockable, table, page_id_);
+      });
+    }
+    
+    return txn.LockManager()->TryLockShared(txn.start_ts, lockable);
   }
   return true;
 }
@@ -98,7 +114,14 @@ auto PageGuard<PageClass>::TryLock(leng_t tree_id, timestamp_t tuple_ts, std::sp
   Ensure(txn.IsRunning());
   if (txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
     LOCKABLE_TUPLE_STACK(lockable, key, tree_id);
-    return txn.LockManager()->TryLock(txn.start_ts, tuple_ts, undo_payload, lockable, GetPageLockState());
+    
+    if (transaction::IsSvccInPageLock()) {
+      return LockInPage([&](transaction::svcc::PageLockTable &table) {
+        return txn.InPageLockManager()->TryLock(undo_payload, lockable, table, page_id_);
+      }); 
+    }
+
+    return txn.LockManager()->TryLock(txn.start_ts, tuple_ts, undo_payload, lockable);
   }
   return true;
 }
