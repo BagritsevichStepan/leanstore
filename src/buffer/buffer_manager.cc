@@ -291,6 +291,14 @@ void BufferManager::HandlePageFault(pageid_t page_id) {
   EnsureFreePages();
   ReadPage(page_id);
   resident_set_.Insert(page_id);
+
+  // SVCC in-page locking: bring back the locks spilled when the page was evicted
+  auto lock_state = IsExtent(page_id) ? nullptr : frame_[page_id].lock_state.get();
+  if (lock_state != nullptr) {
+    lock_state->Restore([&](transaction::svcc::PageLockTable &table) {
+      evicted_locks_.Restore(page_id, table);
+    });
+  }
 }
 
 void BufferManager::ReadPage(pageid_t page_id) {
@@ -416,6 +424,15 @@ void BufferManager::Evict() {
     if (!ret) {
       throw leanstore::ex::GenericException(fmt::format("Evict page {} but it not reside in Buffer Pool", pid));
     }
+
+    // SVCC in-page locking: spill the locks of the page before it is unlocked, i.e. before it can be loaded again
+    auto lock_state = IsExtent(pid) ? nullptr : frame_[pid].lock_state.get();
+    if (lock_state != nullptr) {
+      lock_state->Evict([&](transaction::svcc::PageLockTable &table) {
+        evicted_locks_.Spill(pid, table);
+      });
+    }
+
     GetPageState(pid).UnlockExclusiveAndEvict();
   }
 

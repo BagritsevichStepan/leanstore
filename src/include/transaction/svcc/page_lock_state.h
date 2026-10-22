@@ -94,6 +94,11 @@ inline auto PageLockState::Lock() -> Guard {
 template <typename SpillFn>
 void PageLockState::Evict(SpillFn &&spill) {
   sync::HybridGuard guard(&latch_, sync::GuardMode::EXCLUSIVE);
+  
+  if (state_ == State::RETIRED) {
+    return;
+  }
+
   Ensure(state_ == State::IN_MEMORY);
 
   spill(*table_);
@@ -105,6 +110,11 @@ void PageLockState::Evict(SpillFn &&spill) {
 template <typename RestoreFn>
 void PageLockState::Restore(RestoreFn &&restore) {
   sync::HybridGuard guard(&latch_, sync::GuardMode::EXCLUSIVE);
+  
+  if (state_ == State::RETIRED) {
+    return;
+  }
+
   Ensure(state_ == State::EVICTED);
 
   table_ = std::make_unique<PageLockTable>();
