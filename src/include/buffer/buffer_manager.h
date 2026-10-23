@@ -58,6 +58,7 @@ class BufferManager {
   auto ToPtr(pageid_t page_id) -> storage::Page *;
   auto IsExtent(pageid_t page_id) -> bool;
   auto PageIsDirty(pageid_t page_id) -> bool;
+  void MarkModified(pageid_t page_id);
   auto BufferFramePage(pageid_t page_id) -> buffer::BufferFrame &;
   auto EvictedLocks() -> transaction::svcc::EvictedLockStore &;
   /* SVCC in-page locking: give the page a lock state, called for every leaf when it is created */

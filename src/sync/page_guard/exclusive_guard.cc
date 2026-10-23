@@ -1,4 +1,5 @@
 #include "sync/page_guard/exclusive_guard.h"
+#include "buffer/buffer_manager.h"
 #include "common/utils.h"
 #include "storage/btree/node.h"
 #include "storage/page.h"
@@ -57,7 +58,7 @@ ExclusiveGuard<PageClass>::ExclusiveGuard(OptimisticGuard<PageClass> &&other) no
 template <class PageClass>
 auto ExclusiveGuard<PageClass>::operator=(ExclusiveGuard<PageClass> &&other) noexcept(false) -> ExclusiveGuard & {
   assert(other.mode_ == GuardMode::EXCLUSIVE);
-  if (this->mode_ == GuardMode::EXCLUSIVE) { this->buffer_->GetPageState(this->page_id_).UnlockExclusive(); }
+  if (this->mode_ == GuardMode::EXCLUSIVE) { UnlockExclusive(); }
 
   this->page_id_ = other.page_id_;
   this->buffer_  = other.buffer_;
@@ -77,7 +78,7 @@ ExclusiveGuard<PageClass>::~ExclusiveGuard() noexcept {
 template <class PageClass>
 void ExclusiveGuard<PageClass>::Unlock() {
   if (this->mode_ == GuardMode::EXCLUSIVE) {
-    this->buffer_->GetPageState(this->page_id_).UnlockExclusive();
+    UnlockExclusive();
     this->mode_ = GuardMode::MOVED;
   }
 }
@@ -85,11 +86,17 @@ void ExclusiveGuard<PageClass>::Unlock() {
 template <class PageClass>
 auto ExclusiveGuard<PageClass>::UnlockAndGetPtr() -> PageClass * {
   if (this->mode_ == GuardMode::EXCLUSIVE) {
-    this->buffer_->GetPageState(this->page_id_).UnlockExclusive();
+    UnlockExclusive();
     this->mode_ = GuardMode::MOVED;
     return reinterpret_cast<PageClass *>(this->buffer_->ToPtr(this->page_id_));
   }
   return nullptr;
+}
+
+template <class PageClass>
+void ExclusiveGuard<PageClass>::UnlockExclusive() {
+  this->buffer_->MarkModified(this->page_id_);
+  this->buffer_->GetPageState(this->page_id_).UnlockExclusive();
 }
 
 template class ExclusiveGuard<storage::Page>;

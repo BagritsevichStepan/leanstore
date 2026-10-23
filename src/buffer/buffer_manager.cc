@@ -10,6 +10,7 @@
 #include "recovery/log_manager.h"
 #include "storage/aio.h"
 #include "storage/blob/blob_state.h"
+#include "transaction/cc_mode.h"
 
 #include "cpptrace/cpptrace.hpp"
 #include "fmt/ranges.h"
@@ -233,6 +234,18 @@ auto BufferManager::PageIsDirty(pageid_t page_id) -> bool {
   return frame_[page_id].last_written_gsn < ToPtr(page_id)->p_gsn;
 }
 
+/**
+ * With WAL, a modification advances p_gsn, which makes the page dirty.
+ * Without WAL, p_gsn never advances (it stays >= 1 since the allocation): reset last_written_gsn instead
+ */
+void BufferManager::MarkModified(pageid_t page_id) {
+  if (FLAGS_wal_enable || IsExtent(page_id)) {
+    return;
+  }
+
+  frame_[page_id].last_written_gsn = 0;
+}
+
 auto BufferManager::BufferFramePage(pageid_t page_id) -> buffer::BufferFrame & { return frame_[page_id]; }
 
 auto BufferManager::EvictedLocks() -> transaction::svcc::EvictedLockStore & {
@@ -365,7 +378,9 @@ void BufferManager::Evict() {
              *    (note that blob pages don't associate with any log record, hence this condition doesn't apply)
              * - prevents the page from entering (EXCLUSIVE, MARKED, EVICTED) state
              */
-            if ((IsExtent(pid) || page->p_gsn <= flushed_log_gsn) && (ps.TryLockShared(v))) { to_write.push_back(pid); }
+            if ((!FLAGS_wal_enable || IsExtent(pid) || page->p_gsn <= flushed_log_gsn) && (ps.TryLockShared(v))) {
+              to_write.push_back(pid);
+            }
           } else {
             /**
              * @brief In the case of blob page, eviction reaches this stage only when the blob content is flushed

@@ -20,6 +20,9 @@ class ExclusiveGuard : public PageGuard<PageClass> {
 
   void Unlock();
   auto UnlockAndGetPtr() -> PageClass *;
+
+ private:
+  void UnlockExclusive();
 };
 
 }  // namespace leanstore::sync
