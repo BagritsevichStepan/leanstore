@@ -31,6 +31,8 @@ class InPageLockManager {
     -> bool;
 
  private:
+  static constexpr size_t MAX_IDLE_BUCKETS = 1000;
+
   struct WriteEntry {
     pageid_t leaf;  // the leaf the lock was acquired on
     std::vector<u8> undo_payload;  // previous payload, empty if the key did not exist

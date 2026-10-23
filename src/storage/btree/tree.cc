@@ -10,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <tuple>
+#include <vector>
 
 using leanstore::sync::DeferLog;
 using leanstore::sync::ExclusiveGuard;
@@ -618,9 +619,19 @@ auto BTree::ScanAscending(std::span<u8> key, const AccessRecordFunc &fn) -> OpRe
           if (op_ret == OpResult::STOP_SCAN) { return OpResult::OK; }
           pos++;
         } else {
-          if (!node->header.HasRightNeighbor()) { return OpResult::OK; }
-          pos  = 0;
-          node = OptimisticGuard<BTreeNode>(buffer_, node->header.next_leaf_node);
+          // The next leaf is found by a descent, not by next_leaf_node: a merge doesn't update the left neighbor
+          // of the leaf merged away, which then still points to that dead leaf
+          if (node->header.upper_fence.len == 0) {
+            return OpResult::OK;
+          }
+
+          // The smallest key greater than the upper fence (inclusive) is in the next leaf
+          auto upper_fence = node->GetUpperFence();
+          std::vector<u8> next_key(upper_fence.begin(), upper_fence.end());
+          next_key.push_back(0);
+
+          node = FindLeafOptimistic(next_key);
+          pos = node->LowerBound(next_key, unused, cmp_lambda_);
         }
       }
     } catch (const sync::RestartException &) {}

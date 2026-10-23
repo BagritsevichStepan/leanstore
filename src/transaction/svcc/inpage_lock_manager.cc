@@ -27,6 +27,9 @@ void InPageLockManager::ReleaseAllLocks(const UndoCallback &undo_cb, const Relea
       LockableTuple::Release(entry.first);
     }
     set.clear();
+    if (set.bucket_count() > MAX_IDLE_BUCKETS) {
+      set.rehash(0);
+    }
   };
 
   release_tuples(read_set);
