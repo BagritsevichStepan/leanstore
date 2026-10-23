@@ -155,6 +155,10 @@ void RecoveryManager::Redo() {
     if (pid % FLAGS_wal_recovery_threads == LeanStore::worker_thread_id) {
       ExclusiveGuard<storage::BTreeNode> page(buffer_, pid);
       PerPageRedo(page, pid);
+      // SVCC in-page locking: a recovered leaf gets its lock state
+      if (!page->IsInner()) {
+        buffer_->InitLockState(pid);
+      }
     }
   }
 }

@@ -28,7 +28,7 @@ BTree::BTree(buffer::BufferManager *buffer_pool, u32 tree_slot) : buffer_(buffer
     ExclusiveGuard<MetadataPage> meta_page(buffer_, METADATA_PAGE_ID);
     ExclusiveGuard<BTreeNode> root_page(buffer_, buffer_->AllocPage());
     new (root_page.Ptr()) storage::BTreeNode(true);
-    InitLockState(root_page.PageID());
+    buffer_->InitLockState(root_page.PageID());
     meta_page->roots[metadata_slotid_] = root_page.PageID();
     // -------------------------------------------------------------------------------------
     if (FLAGS_wal_enable) {
@@ -39,12 +39,6 @@ BTree::BTree(buffer::BufferManager *buffer_pool, u32 tree_slot) : buffer_(buffer
 }
 
 void BTree::SetComparisonOperator(ComparisonLambda cmp_op) { cmp_lambda_ = cmp_op; }
-
-void BTree::InitLockState(pageid_t leaf_pid) {
-  if (IsSvccInPageLock()) {
-    buffer_->BufferFramePage(leaf_pid).lock_state = std::make_unique<PageLockState>();
-  }
-}
 
 auto BTree::IterateAllNodes(OptimisticGuard<BTreeNode> &node, const std::function<u64(BTreeNode &)> &inner_fn,
                             const std::function<u64(BTreeNode &)> &leaf_fn) -> u64 {
@@ -140,7 +134,7 @@ void BTree::TrySplit(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
     new (new_child.Ptr()) storage::BTreeNode(!node_is_inner);
 
     if (!node_is_inner) {
-      InitLockState(new_child.PageID());
+      buffer_->InitLockState(new_child.PageID());
     }
 
     // now split the node

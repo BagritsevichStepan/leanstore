@@ -60,6 +60,8 @@ class BufferManager {
   auto PageIsDirty(pageid_t page_id) -> bool;
   auto BufferFramePage(pageid_t page_id) -> buffer::BufferFrame &;
   auto EvictedLocks() -> transaction::svcc::EvictedLockStore &;
+  /* SVCC in-page locking: give the page a lock state, called for every leaf when it is created */
+  void InitLockState(pageid_t page_id);
   void ChunkOperation(pageid_t start_pid, u64 no_bytes, const std::function<void(u64, std::span<u8>)> &func);
 
   // Main page life-cycle

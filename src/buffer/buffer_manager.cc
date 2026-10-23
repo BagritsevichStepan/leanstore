@@ -239,6 +239,15 @@ auto BufferManager::EvictedLocks() -> transaction::svcc::EvictedLockStore & {
   return evicted_locks_;
 }
 
+void BufferManager::InitLockState(pageid_t page_id) {
+  if (!transaction::IsSvccInPageLock()) {
+    return;
+  }
+
+  Ensure(!IsExtent(page_id));
+  frame_[page_id].lock_state = std::make_unique<transaction::svcc::PageLockState>();
+}
+
 /**
  * @brief Chunk operation to simulate overheads of normal Buffer Manager
  */
