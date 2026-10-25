@@ -12,24 +12,14 @@ namespace leanstore::transaction::svcc {
 
 /**
  * @brief Lock state of a single page that holds locks (SVCC in-page locking).
- *
- * It outlives the residency of its page: the page may be evicted and loaded again many times.
- * Every access to the state and to the lock table goes through the latch of this object, see Guard.
- *
- * State transitions (each one under the latch, and under an X-latch on the page):
- *  - IN_MEMORY -> EVICTED: the page is evicted, its locks are moved out of the table
- *  - EVICTED -> IN_MEMORY: the page is loaded, its locks are moved back into a new table
- *  - IN_MEMORY -> RETIRED: the page no longer holds locks and never will again,
- *                          its locks were handed over to another page
- *
- * A RETIRED object is never deleted: a thread may still wait on its latch.
  */
 class PageLockState {
  public:
   enum class State : u8 {
-    IN_MEMORY,
-    EVICTED,
-    RETIRED
+    IN_MEMORY,           // the page is in memory, its locks (if any) are in its table
+    EVICTED,             // the page is evicted, it holds no locks
+    EVICTED_WITH_LOCKS,  // the page is evicted, its locks are in the EvictedLockStore
+    RETIRED              // the page was merged away
   };
 
   // Exclusive access to the state and the lock table, for as long as the guard lives.
@@ -38,9 +28,20 @@ class PageLockState {
     explicit Guard(PageLockState &owner);
 
     auto GetState() const -> State;
+    auto IsInMemory() const -> bool;
+    auto IsEvictedWithLocks() const -> bool;
+
+    /* Returns the lock table, which must exist */
     auto GetLockTable() -> PageLockTable &;
+    /* Returns the lock table, created if the page has none yet */
+    auto GetOrCreateLockTable() -> PageLockTable &;
+    /* Returns the lock table, nullptr if the page has none */
+    auto GetLockTableIfExists() -> PageLockTable *;
+    
 
     void Retire();
+    /* EVICTED_WITH_LOCKS -> EVICTED */
+    void DropEvictedLocks();
 
    private:
     PageLockState &owner_;
@@ -54,18 +55,18 @@ class PageLockState {
 
   auto Lock() -> Guard;
 
-  /* IN_MEMORY -> EVICTED: spill() moves the locks out of the table, then the table is deleted */
+  /* IN_MEMORY -> EVICTED(_WITH_LOCKS): spill() moves the locks (if any) out of the table, the table is deleted */
   template <typename SpillFn>
   void Evict(SpillFn &&spill);
 
-  /* EVICTED -> IN_MEMORY: restore() fills a new table with the locks moved out by Evict() */
+  /* EVICTED(_WITH_LOCKS) -> IN_MEMORY: restore() fills a new table with the locks moved out by Evict(), if any */
   template <typename RestoreFn>
   void Restore(RestoreFn &&restore);
 
  private:
   sync::HybridLatch latch_;
   State state_ = State::IN_MEMORY;
-  std::unique_ptr<PageLockTable> table_ = std::make_unique<PageLockTable>();
+  std::unique_ptr<PageLockTable> table_;
 };
 
 // Implementation
@@ -76,15 +77,44 @@ inline auto PageLockState::Guard::GetState() const -> State {
   return owner_.state_;
 }
 
-inline auto PageLockState::Guard::GetLockTable() -> PageLockTable & {
-  Ensure(owner_.state_ == State::IN_MEMORY);
+inline auto PageLockState::Guard::IsInMemory() const -> bool {
+  return owner_.state_ == State::IN_MEMORY;
+}
+
+inline auto PageLockState::Guard::IsEvictedWithLocks() const -> bool {
+  return owner_.state_ == State::EVICTED_WITH_LOCKS;
+}
+
+inline auto PageLockState::Guard::GetOrCreateLockTable() -> PageLockTable & {
+  Ensure(IsInMemory());
+
+  if (owner_.table_ == nullptr) {
+    owner_.table_ = std::make_unique<PageLockTable>();
+  }
+
   return *owner_.table_;
 }
 
+inline auto PageLockState::Guard::GetLockTableIfExists() -> PageLockTable * {
+  Ensure(IsInMemory());
+  return owner_.table_.get();
+}
+
+inline auto PageLockState::Guard::GetLockTable() -> PageLockTable & {
+  auto table = GetLockTableIfExists();
+  Ensure(table != nullptr);
+  return *table;
+}
+
 inline void PageLockState::Guard::Retire() {
-  Ensure(owner_.state_ == State::IN_MEMORY);
+  Ensure(IsInMemory());
   owner_.table_.reset();
   owner_.state_ = State::RETIRED;
+}
+
+inline void PageLockState::Guard::DropEvictedLocks() {
+  Ensure(IsEvictedWithLocks());
+  owner_.state_ = State::EVICTED;
 }
 
 inline auto PageLockState::Lock() -> Guard {
@@ -101,10 +131,14 @@ void PageLockState::Evict(SpillFn &&spill) {
 
   Ensure(state_ == State::IN_MEMORY);
 
-  spill(*table_);
+  if (table_ != nullptr && !table_->Empty()) {
+    spill(*table_);
+    state_ = State::EVICTED_WITH_LOCKS;
+  } else {
+    state_ = State::EVICTED;
+  }
 
   table_.reset();
-  state_ = State::EVICTED;
 }
 
 template <typename RestoreFn>
@@ -115,10 +149,13 @@ void PageLockState::Restore(RestoreFn &&restore) {
     return;
   }
 
-  Ensure(state_ == State::EVICTED);
+  Ensure(state_ == State::EVICTED || state_ == State::EVICTED_WITH_LOCKS);
 
-  table_ = std::make_unique<PageLockTable>();
-  restore(*table_);
+  if (state_ == State::EVICTED_WITH_LOCKS) {
+    table_ = std::make_unique<PageLockTable>();
+    restore(*table_);
+  }
+  
   state_ = State::IN_MEMORY;
 }
 

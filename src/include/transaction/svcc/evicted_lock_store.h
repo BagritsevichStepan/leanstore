@@ -26,8 +26,11 @@ class EvictedLockStore {
   // Restore of page
   void Restore(pageid_t pid, PageLockTable &table);
 
-  /* Releases the lock of (pid, key) of the evicted page pid, which must be in the store; erases it once free */
-  void Release(pageid_t pid, std::string_view key, bool exclusive);
+  /**
+   * Releases the lock of (pid, key) of the evicted page pid, which must be in the store; erases it once free.
+   * @return true if the store holds no more locks of the page
+   */
+  auto Release(pageid_t pid, std::string_view key, bool exclusive) -> bool;
 
  private:
   sync::HybridLatch latch_;

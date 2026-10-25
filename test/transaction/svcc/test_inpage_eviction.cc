@@ -101,7 +101,8 @@ class TestSVCCInPageEviction : public BaseTest {
     std::vector<pageid_t> leaves;
     for (auto pid : Leaves()) {
       auto guard = LockState(pid).Lock();
-      if (guard.GetState() == PageLockState::State::IN_MEMORY && !guard.GetLockTable().Empty()) {
+      auto table = guard.IsInMemory() ? guard.GetLockTableIfExists() : nullptr;
+      if (table != nullptr && !table->Empty()) {
         leaves.push_back(pid);
       }
     }
@@ -188,10 +189,12 @@ TEST_F(TestSVCCInPageEviction, ReleaseWhileEvicted) {
   EXPECT_THAT(LeavesWithLocks(), ElementsAreArray({leaf}));
 
   Evict({leaf});
-  ExpectState(leaf, PageLockState::State::EVICTED);
+  ExpectState(leaf, PageLockState::State::EVICTED_WITH_LOCKS);
 
   txn_man_->CommitTransaction();
   EXPECT_EQ(buffer_->GetPageState(leaf).LockState(), sync::PageState::EVICTED);
+  // Its last lock left the store
+  ExpectState(leaf, PageLockState::State::EVICTED);
 
   // Loading the leaf brings back an empty table: the store has nothing left for it
   StartTransaction();
@@ -211,7 +214,7 @@ TEST_F(TestSVCCInPageEviction, LocksComeBackOnLoad) {
   Update(2, Value(2, 2), OpResult::OK);
 
   Evict({leaf});
-  ExpectState(leaf, PageLockState::State::EVICTED);
+  ExpectState(leaf, PageLockState::State::EVICTED_WITH_LOCKS);
 
   // Reading another key of the leaf loads it
   ExpectValue(3, Value(3, 1));
@@ -231,7 +234,7 @@ TEST_F(TestSVCCInPageEviction, AbortAfterEviction) {
   Update(2, Value(2, 2), OpResult::OK);
 
   Evict({leaf});
-  ExpectState(leaf, PageLockState::State::EVICTED);
+  ExpectState(leaf, PageLockState::State::EVICTED_WITH_LOCKS);
 
   txn_man_->AbortTransaction();
   ExpectState(leaf, PageLockState::State::IN_MEMORY);
@@ -315,7 +318,7 @@ TEST_F(TestSVCCInPageEviction, SplitThenEvict) {
   auto with_locks = LeavesWithLocks();
   Evict(with_locks);
   for (auto pid : with_locks) {
-    ExpectState(pid, PageLockState::State::EVICTED);
+    ExpectState(pid, PageLockState::State::EVICTED_WITH_LOCKS);
   }
 
   for (auto key : locked) {
@@ -326,6 +329,7 @@ TEST_F(TestSVCCInPageEviction, SplitThenEvict) {
   txn_man_->CommitTransaction();
   for (auto pid : with_locks) {
     EXPECT_EQ(buffer_->GetPageState(pid).LockState(), sync::PageState::EVICTED);
+    ExpectState(pid, PageLockState::State::EVICTED);
   }
 
   // Loading the leaves again: nothing left in the store
@@ -369,13 +373,14 @@ TEST_F(TestSVCCInPageEviction, MergeThenEvict) {
   // The retired leaf is evicted as well: it has no locks to spill and stays retired
   Evict({hint, merged});
   ExpectState(hint, PageLockState::State::RETIRED);
-  ExpectState(merged, PageLockState::State::EVICTED);
+  ExpectState(merged, PageLockState::State::EVICTED_WITH_LOCKS);
 
   ExpectConflictInOtherWorker(1, false);
 
   Evict({merged});
   txn_man_->CommitTransaction();
   EXPECT_EQ(buffer_->GetPageState(merged).LockState(), sync::PageState::EVICTED);
+  ExpectState(merged, PageLockState::State::EVICTED);
 
   StartTransaction();
   ExpectValue(1, Value(1, LARGE_VALUE));

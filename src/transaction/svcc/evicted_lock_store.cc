@@ -30,7 +30,7 @@ void EvictedLockStore::Restore(pageid_t pid, PageLockTable &table) {
   pages_.erase(page);
 }
 
-void EvictedLockStore::Release(pageid_t pid, std::string_view key, bool exclusive) {
+auto EvictedLockStore::Release(pageid_t pid, std::string_view key, bool exclusive) -> bool {
   sync::HybridGuard guard(&latch_, sync::GuardMode::EXCLUSIVE);
 
   auto page = pages_.find(pid);
@@ -41,7 +41,10 @@ void EvictedLockStore::Release(pageid_t pid, std::string_view key, bool exclusiv
 
   if (page_lock_table.Empty()) {
     pages_.erase(page);
+    return true;
   }
+  
+  return false;
 }
 
 }  // namespace leanstore::transaction::svcc

@@ -20,7 +20,6 @@ using leanstore::transaction::IsMvcc;
 using leanstore::transaction::IsSvccInPageLock;
 using leanstore::transaction::IsSvccLockTable;
 using leanstore::transaction::Transaction;
-using leanstore::transaction::svcc::PageLockState;
 
 namespace leanstore::storage {
 
@@ -147,8 +146,11 @@ void BTree::TrySplit(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
     if (IsSvccInPageLock() && !node_is_inner) {
       auto left_locks = buffer_->BufferFramePage(node.PageID()).lock_state->Lock();
       auto right_locks = buffer_->BufferFramePage(new_child.PageID()).lock_state->Lock();
-      auto separator_as_sv = std::string_view(reinterpret_cast<const char *>(sep_key), sep_info.len);
-      left_locks.GetLockTable().MoveUpperRange(separator_as_sv, cmp_lambda_, right_locks.GetLockTable());
+      auto left_table = left_locks.GetLockTableIfExists();
+      if (left_table != nullptr && !left_table->Empty()) {
+        auto separator_as_sv = std::string_view(reinterpret_cast<const char *>(sep_key), sep_info.len);
+        left_table->MoveUpperRange(separator_as_sv, cmp_lambda_, right_locks.GetOrCreateLockTable());
+      }
     }
     
     // -------------------------------------------------------------------------------------
@@ -218,7 +220,10 @@ void BTree::TryMerge(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
     if (IsSvccInPageLock() && !right->IsInner()) {
       auto left_locks = buffer_->BufferFramePage(left.PageID()).lock_state->Lock();
       auto right_locks = buffer_->BufferFramePage(right.PageID()).lock_state->Lock();
-      left_locks.GetLockTable().MergeInto(right_locks.GetLockTable());
+      auto left_table = left_locks.GetLockTableIfExists();
+      if (left_table != nullptr && !left_table->Empty()) {
+        left_table->MergeInto(right_locks.GetOrCreateLockTable());
+      }
       left_locks.Retire();
     }
     // TODO(XXX): Free page left.PageID()
@@ -736,7 +741,8 @@ void BTree::ReleaseInPageLock(std::string_view key, pageid_t leaf_hint, bool exc
   
   {
     auto guard = hint_lock_state->Lock();
-    if (guard.GetState() == PageLockState::State::IN_MEMORY && guard.GetLockTable().TryRelease(key, exclusive)) {
+    auto table = guard.IsInMemory() ? guard.GetLockTableIfExists() : nullptr;
+    if (table != nullptr && table->TryRelease(key, exclusive)) {
       return;
     }
   }
@@ -764,11 +770,13 @@ void BTree::ReleaseInPageLock(std::string_view key, pageid_t leaf_hint, bool exc
         // and they can't do it now: they need the latch of its lock state
         auto guard = lock_state->Lock();
         parent.ValidateOrRestart(true);
-        if (guard.GetState() == PageLockState::State::IN_MEMORY) {
+        if (guard.IsInMemory()) {
           guard.GetLockTable().Release(key, exclusive);
         } else {
-          Ensure(guard.GetState() == PageLockState::State::EVICTED);
-          buffer_->EvictedLocks().Release(child, key, exclusive);
+          Ensure(guard.IsEvictedWithLocks());
+          if (buffer_->EvictedLocks().Release(child, key, exclusive)) {
+            guard.DropEvictedLocks();
+          }
         }
         return;
       }

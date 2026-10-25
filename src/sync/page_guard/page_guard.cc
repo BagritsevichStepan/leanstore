@@ -83,7 +83,7 @@ auto PageGuard<PageClass>::LockInPage(LockFn &&lock) -> bool {
 
   auto guard = lock_state->Lock();
   ValidateOrRestart(false);
-  return lock(guard.GetLockTable());
+  return lock(guard.GetOrCreateLockTable());
 }
 
 template <class PageClass>

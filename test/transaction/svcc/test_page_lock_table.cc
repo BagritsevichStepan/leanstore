@@ -144,7 +144,7 @@ TEST(PageLockStateTest, ConcurrentSharedLocks) {
         std::memcpy(key.data(), &k, sizeof(int));
         // The table itself is not thread-safe: every access goes through the latch of its PageLockState
         auto guard = page.Lock();
-        EXPECT_TRUE(AcquireShared(guard.GetLockTable(), key, t));
+        EXPECT_TRUE(AcquireShared(guard.GetOrCreateLockTable(), key, t));
       }
     });
   }
@@ -157,6 +157,6 @@ TEST(PageLockStateTest, ConcurrentSharedLocks) {
   for (int k = 0; k < NO_KEYS; k++) {
     Key key(sizeof(int), 0);
     std::memcpy(key.data(), &k, sizeof(int));
-    EXPECT_FALSE(AcquireExclusive(guard.GetLockTable(), key, NO_THREADS + 1, false));
+    EXPECT_FALSE(AcquireExclusive(guard.GetOrCreateLockTable(), key, NO_THREADS + 1, false));
   }
 }
