@@ -7,6 +7,7 @@
 #include "share_headers/time.h"
 
 #include <sys/sysinfo.h>
+#include <unistd.h>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -19,6 +20,19 @@
 #include <span>
 
 namespace leanstore {
+
+namespace {
+
+/* Resident memory of the process, including the buffer pool */
+auto ResidentSetMB() -> float {
+  std::ifstream statm("/proc/self/statm");
+  u64 size = 0;
+  u64 resident = 0;
+  statm >> size >> resident;
+  return static_cast<float>(resident * sysconf(_SC_PAGESIZE)) / MB;
+}
+
+} // namespace
 
 InternalCatalog catalog;
 u32 LeanStore::signature = 0;
@@ -270,13 +284,19 @@ void LeanStore::StartProfilingThread() {
     pthread_setname_np(pthread_self(), "stats_collector");
     std::printf(
       "ts,committed_tx,aborted_tx,precommited_tx,commit_rounds,bm_rmb,bm_wmb,bm_evict,log_sz_mb,logio_mb,log_flush_cnt,"
-       "gct_p1_us,gct_p2_us,gct_p3_us,db_size\n");
+       "gct_p1_us,gct_p2_us,gct_p3_us,db_size,rss_mb,elapsed_s\n");
     auto cnt           = 0UL;
     auto commit_exec   = 0UL;
     auto commit_rounds = 0UL;
+    
+    // A sample every second on a fixed schedule: the time spent on a sample doesn't delay the next one
+    auto start = std::chrono::steady_clock::now();
+    auto next_tick = start;
 
     while (is_running) {
-      std::this_thread::sleep_for(std::chrono::seconds(1));
+      next_tick += std::chrono::seconds(1);
+      std::this_thread::sleep_until(next_tick);
+      auto elapsed_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
       if (!start_profiling_latency) { start_profiling_latency = true; }
       // Progress stats
       auto rounds         = 0UL;
@@ -297,6 +317,7 @@ void LeanStore::StartProfilingThread() {
       auto w_mb  = static_cast<float>(statistics::buffer::write_cnt.exchange(0) * PAGE_SIZE) / MB;
       auto e_cnt = statistics::buffer::evict_cnt.exchange(0);
       auto db_sz = DBSize();
+      auto rss_mb = ResidentSetMB();
       // Group commit stats
       auto log_sz        = 0.0F;
       auto log_write     = 0.0F;
@@ -314,9 +335,9 @@ void LeanStore::StartProfilingThread() {
       }
       commit_exec += p1_us + p2_us + p3_us;
       // Output
-      std::printf("%lu,%lu,%lu,%lu,%lu,%.4f,%.4f,%lu,%.4f,%.4f,%lu,%lu,%lu,%lu,%.4f\n", cnt++, committed_tx, aborted_tx,
-                   precommited_tx, rounds, r_mb, w_mb, e_cnt, log_sz, log_write, log_flush_cnt, p1_us, p2_us, p3_us,
-                   db_sz);
+      std::printf("%lu,%lu,%lu,%lu,%lu,%.4f,%.4f,%lu,%.4f,%.4f,%lu,%lu,%lu,%lu,%.4f,%.4f,%.3f\n", cnt++,
+                   committed_tx, aborted_tx, precommited_tx, rounds, r_mb, w_mb, e_cnt, log_sz, log_write, log_flush_cnt,
+                   p1_us, p2_us, p3_us, db_sz, rss_mb, elapsed_s);
     }
     spdlog::info("Transaction statistics: # committed txns: {}", statistics::total_committed_txn.load());
     spdlog::info("AvgGroupCommitTime: {:.4f}us - No rounds {} - Txn per round {:.4f}",
