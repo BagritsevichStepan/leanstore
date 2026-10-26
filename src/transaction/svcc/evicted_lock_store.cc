@@ -7,9 +7,11 @@
 namespace leanstore::transaction::svcc {
 
 void EvictedLockStore::Spill(pageid_t pid, PageLockTable &table) {
-  if (table.Empty()) {
+  if (table.IsEmpty()) {
     return;
   }
+
+  table.Compact();
 
   sync::HybridGuard guard(&latch_, sync::GuardMode::EXCLUSIVE);
   // The table is moved as a whole: its locks are not copied one by one, the table is empty afterwards
@@ -18,7 +20,7 @@ void EvictedLockStore::Spill(pageid_t pid, PageLockTable &table) {
 }
 
 void EvictedLockStore::Restore(pageid_t pid, PageLockTable &table) {
-  Ensure(table.Empty());
+  Ensure(table.IsEmpty());
 
   sync::HybridGuard guard(&latch_, sync::GuardMode::EXCLUSIVE);
   auto page = pages_.find(pid);
@@ -30,7 +32,7 @@ void EvictedLockStore::Restore(pageid_t pid, PageLockTable &table) {
   pages_.erase(page);
 }
 
-auto EvictedLockStore::Release(pageid_t pid, std::string_view key, bool exclusive) -> bool {
+auto EvictedLockStore::Release(pageid_t pid, std::span<const u8> key, bool exclusive) -> bool {
   sync::HybridGuard guard(&latch_, sync::GuardMode::EXCLUSIVE);
 
   auto page = pages_.find(pid);
@@ -39,7 +41,7 @@ auto EvictedLockStore::Release(pageid_t pid, std::string_view key, bool exclusiv
   auto &page_lock_table = page->second;
   page_lock_table.Release(key, exclusive);
 
-  if (page_lock_table.Empty()) {
+  if (page_lock_table.IsEmpty()) {
     pages_.erase(page);
     return true;
   }

@@ -102,7 +102,7 @@ class TestSVCCInPageEviction : public BaseTest {
     for (auto pid : Leaves()) {
       auto guard = LockState(pid).Lock();
       auto table = guard.IsInMemory() ? guard.GetLockTableIfExists() : nullptr;
-      if (table != nullptr && !table->Empty()) {
+      if (table != nullptr && !table->IsEmpty()) {
         leaves.push_back(pid);
       }
     }

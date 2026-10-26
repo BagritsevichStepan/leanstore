@@ -48,6 +48,8 @@ add_benchmark(SQLite_YCSB main/ycsb/sqlite3_ycsb.cc)
 add_benchmark(WiredTiger_YCSB main/ycsb/wiredtiger_ycsb.cc)
 add_benchmark(MicroSparsePTE micro/sparse_pte.cc)
 add_benchmark(MicroRDTSC micro/rdtsc.cc)
+add_benchmark(MicroPageLockTable micro/page_lock_table.cc)
+add_benchmark(MicroInPageLockManager micro/inpage_lock_manager.cc)
 
 # ---------------------------------------------------------------------------
 # Tests for custom prototypes

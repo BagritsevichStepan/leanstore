@@ -1,13 +1,14 @@
 #pragma once
 
+#include "common/exceptions.h"
 #include "common/typedefs.h"
 #include "transaction/lockable_tuple.h"
+#include "transaction/svcc/detail/txn_arena.h"
 #include "transaction/svcc/page_lock_table.h"
 
-#include <functional>
+#include "parallel_hashmap/phmap.h"
+
 #include <span>
-#include <unordered_map>
-#include <vector>
 
 namespace leanstore::transaction::svcc {
 
@@ -16,14 +17,10 @@ namespace leanstore::transaction::svcc {
  */
 class InPageLockManager {
  public:
-  /* Undoes a write: re-installs undo_payload, or removes the key if it is empty */
-  using UndoCallback = std::function<void(const LockableTuple *, std::span<const u8> undo_payload)>;
-  /* Releases the lock of a tuple. leaf_hint is the leaf the lock was acquired on */
-  using ReleaseLockCallback = std::function<void(const LockableTuple *, pageid_t leaf_hint, bool exclusive)>;
-
   auto EmptyLocalSet() -> bool;
 
-  void ReleaseAllLocks(const UndoCallback &undo_cb, const ReleaseLockCallback &release_lock_cb);
+  template <typename UndoFn, typename ReleaseLockFn>
+  void ReleaseAllLocks(UndoFn &&undo_cb, ReleaseLockFn &&release_lock_cb);
 
   auto TryLockShared(const LockableTuple *key, PageLockTable &page_lock_table, pageid_t page_id) -> bool;
 
@@ -31,19 +28,49 @@ class InPageLockManager {
     -> bool;
 
  private:
-  static constexpr size_t MAX_IDLE_BUCKETS = 1000;
+  /* Above it, the table of the held locks is freed at the end of a transaction instead of cleared slot by slot */
+  static constexpr size_t MAX_IDLE_CAPACITY = 3000;
 
-  struct WriteEntry {
-    pageid_t leaf;  // the leaf the lock was acquired on
-    std::vector<u8> undo_payload;  // previous payload, empty if the key did not exist
+  struct HeldLock {
+    pageid_t leaf;
+    bool exclusive;
+    std::span<const u8> undo_payload;
   };
 
-  using ReadSet = std::unordered_map<LockableTuple *, pageid_t, LockableTuple::HashPtr, LockableTuple::EqualPtr>;
-  using WriteSet = std::unordered_map<LockableTuple *, WriteEntry, LockableTuple::HashPtr, LockableTuple::EqualPtr>;
+  using HeldLocks = phmap::flat_hash_map<const LockableTuple *, HeldLock, LockableTuple::HashPtr,
+                                         LockableTuple::EqualPtr>;
 
-  // Thread-local sets of currently held locks
-  static thread_local ReadSet read_set;
-  static thread_local WriteSet write_set;
+  static thread_local HeldLocks held_locks;
+  static thread_local detail::TxnArena arena;
 };
+
+// Implementation
+inline auto InPageLockManager::EmptyLocalSet() -> bool {
+  return held_locks.empty();
+}
+
+template <typename UndoFn, typename ReleaseLockFn>
+void InPageLockManager::ReleaseAllLocks(UndoFn &&undo_cb, ReleaseLockFn &&release_lock_cb) {
+  const auto held_lock_count = held_locks.size();
+  for (auto &[tuple, lock] : held_locks) {
+    if (lock.exclusive) {
+      undo_cb(tuple, lock.undo_payload);
+    }
+  }
+
+  Ensure(held_locks.size() == held_lock_count);
+
+  for (auto &[tuple, lock] : held_locks) {
+    release_lock_cb(tuple, lock.leaf, lock.exclusive);
+  }
+
+  if (held_locks.capacity() > MAX_IDLE_CAPACITY) {
+    HeldLocks().swap(held_locks);
+  } else {
+    held_locks.clear();
+  }
+
+  arena.Reset();
+}
 
 }  // namespace leanstore::transaction::svcc

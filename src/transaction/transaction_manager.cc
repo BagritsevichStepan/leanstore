@@ -27,7 +27,7 @@ namespace {
 /* SVCC in-page locking: the lock lives in the leaf covering the key (or in the EvictedLockStore) */
 void ReleaseInPageLock(const LockableTuple *tuple, pageid_t leaf_hint, bool exclusive) {
   auto index = reinterpret_cast<storage::BTree *>(catalog[tuple->tree_id]);
-  index->ReleaseInPageLock(tuple->KeyView(), leaf_hint, exclusive);
+  index->ReleaseInPageLock({tuple->key, tuple->key_len}, leaf_hint, exclusive);
 }
 
 /* Undo a write: re-install the previous payload, or remove the key if it did not exist */

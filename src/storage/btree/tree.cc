@@ -147,9 +147,8 @@ void BTree::TrySplit(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
       auto left_locks = buffer_->BufferFramePage(node.PageID()).lock_state->Lock();
       auto right_locks = buffer_->BufferFramePage(new_child.PageID()).lock_state->Lock();
       auto left_table = left_locks.GetLockTableIfExists();
-      if (left_table != nullptr && !left_table->Empty()) {
-        auto separator_as_sv = std::string_view(reinterpret_cast<const char *>(sep_key), sep_info.len);
-        left_table->MoveUpperRange(separator_as_sv, cmp_lambda_, right_locks.GetOrCreateLockTable());
+      if (left_table != nullptr && !left_table->IsEmpty()) {
+        left_table->MoveUpperRange({sep_key, sep_info.len}, cmp_lambda_, right_locks.GetOrCreateLockTable());
       }
     }
     
@@ -221,7 +220,7 @@ void BTree::TryMerge(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
       auto left_locks = buffer_->BufferFramePage(left.PageID()).lock_state->Lock();
       auto right_locks = buffer_->BufferFramePage(right.PageID()).lock_state->Lock();
       auto left_table = left_locks.GetLockTableIfExists();
-      if (left_table != nullptr && !left_table->Empty()) {
+      if (left_table != nullptr && !left_table->IsEmpty()) {
         left_table->MergeInto(right_locks.GetOrCreateLockTable());
       }
       left_locks.Retire();
@@ -733,7 +732,7 @@ void BTree::UpdateTimestamp(std::span<u8> key, timestamp_t commit_ts) {
   }
 }
 
-void BTree::ReleaseInPageLock(std::string_view key, pageid_t leaf_hint, bool exclusive) {
+void BTree::ReleaseInPageLock(std::span<const u8> key, pageid_t leaf_hint, bool exclusive) {
   // 1. Fast path: the lock is still in the table of the hint leaf. A held lock is in exactly one table,
   // so finding the key there means it is ours. Absent => split/merge/eviction moved it away
   auto hint_lock_state = buffer_->BufferFramePage(leaf_hint).lock_state.get();
@@ -748,7 +747,6 @@ void BTree::ReleaseInPageLock(std::string_view key, pageid_t leaf_hint, bool exc
   }
 
   // 2. Slow path: descend by key
-  auto search_key = std::span<u8>(reinterpret_cast<u8 *>(const_cast<char *>(key.data())), key.size());
   while (true) {
     try {
       OptimisticGuard<BTreeNode> parent(buffer_, METADATA_PAGE_ID);
@@ -761,7 +759,7 @@ void BTree::ReleaseInPageLock(std::string_view key, pageid_t leaf_hint, bool exc
         if (lock_state == nullptr) {
           // An inner node
           OptimisticGuard<BTreeNode> node(buffer_, child, parent);
-          child = node->FindChild(search_key, cmp_lambda_);
+          child = node->FindChild(key, cmp_lambda_);
           parent = std::move(node);
           continue;
         }

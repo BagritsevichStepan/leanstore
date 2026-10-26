@@ -51,21 +51,21 @@ auto BTreeNodeImpl<NodeHeader>::GetPrefix() -> u8 * {
 }
 
 template <class NodeHeader>
-auto BTreeNodeImpl<NodeHeader>::GetHead(u8 *key, leng_t key_len) -> std::array<u8, 4> {
+auto BTreeNodeImpl<NodeHeader>::GetHead(const u8 *key, leng_t key_len) -> std::array<u8, 4> {
   std::array<u8, 4> ret = {0};
   std::memcpy(ret.data(), key, std::min(key_len, static_cast<leng_t>(4)));
   return ret;
 }
 
 template <class NodeHeader>
-auto BTreeNodeImpl<NodeHeader>::FindChild(std::span<u8> search_key, leng_t &pos, const ComparisonLambda &cmp)
+auto BTreeNodeImpl<NodeHeader>::FindChild(std::span<const u8> search_key, leng_t &pos, const ComparisonLambda &cmp)
   -> pageid_t {
   pos = LowerBound(search_key, cmp);
   return (pos == header.count) ? header.right_most_child : GetChild(pos);
 }
 
 template <class NodeHeader>
-auto BTreeNodeImpl<NodeHeader>::FindChild(std::span<u8> search_key, const ComparisonLambda &cmp) -> pageid_t {
+auto BTreeNodeImpl<NodeHeader>::FindChild(std::span<const u8> search_key, const ComparisonLambda &cmp) -> pageid_t {
   leng_t unused;
   return FindChild(search_key, unused, cmp);
 }
@@ -267,7 +267,7 @@ void BTreeNodeImpl<NodeHeader>::SearchHint(const std::array<u8, 4> &key_head, le
 
 // -------------------------------------------------------------------------------------
 template <class NodeHeader>
-auto BTreeNodeImpl<NodeHeader>::LowerBound(std::span<u8> search_key, bool &exact_found, const ComparisonLambda &cmp)
+auto BTreeNodeImpl<NodeHeader>::LowerBound(std::span<const u8> search_key, bool &exact_found, const ComparisonLambda &cmp)
   -> leng_t {
   exact_found = false;
 
@@ -282,7 +282,7 @@ auto BTreeNodeImpl<NodeHeader>::LowerBound(std::span<u8> search_key, bool &exact
   // key is a substring of the prefix
   if (search_key.size() < header.prefix_len) { return 0; }
 
-  u8 *key         = search_key.data() + header.prefix_len;
+  const u8 *key   = search_key.data() + header.prefix_len;
   auto key_length = search_key.size() - header.prefix_len;
 
   // check hint
@@ -322,7 +322,7 @@ auto BTreeNodeImpl<NodeHeader>::LowerBound(std::span<u8> search_key, bool &exact
 }
 
 template <class NodeHeader>
-auto BTreeNodeImpl<NodeHeader>::LowerBound(std::span<u8> search_key, const ComparisonLambda &cmp) -> leng_t {
+auto BTreeNodeImpl<NodeHeader>::LowerBound(std::span<const u8> search_key, const ComparisonLambda &cmp) -> leng_t {
   bool ignore;
   return LowerBound(search_key, ignore, cmp);
 }

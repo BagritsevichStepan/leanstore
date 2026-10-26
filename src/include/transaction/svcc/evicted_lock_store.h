@@ -4,7 +4,7 @@
 #include "sync/hybrid_latch.h"
 #include "transaction/svcc/page_lock_table.h"
 
-#include <string_view>
+#include <span>
 #include <unordered_map>
 
 namespace leanstore::transaction::svcc {
@@ -30,7 +30,7 @@ class EvictedLockStore {
    * Releases the lock of (pid, key) of the evicted page pid, which must be in the store; erases it once free.
    * @return true if the store holds no more locks of the page
    */
-  auto Release(pageid_t pid, std::string_view key, bool exclusive) -> bool;
+  auto Release(pageid_t pid, std::span<const u8> key, bool exclusive) -> bool;
 
  private:
   sync::HybridLatch latch_;

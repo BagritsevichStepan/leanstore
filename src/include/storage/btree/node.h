@@ -155,9 +155,9 @@ class alignas(PAGE_SIZE) BTreeNodeImpl : public PageHeader {
   auto Ptr() -> u8 *;
   auto IsInner() -> bool;
   auto GetPrefix() -> u8 *;
-  static auto GetHead(u8 *key, leng_t key_len) -> std::array<u8, 4>;
-  auto FindChild(std::span<u8> search_key, const ComparisonLambda &cmp) -> pageid_t;
-  auto FindChild(std::span<u8> search_key, leng_t &pos, const ComparisonLambda &cmp) -> pageid_t;
+  static auto GetHead(const u8 *key, leng_t key_len) -> std::array<u8, 4>;
+  auto FindChild(std::span<const u8> search_key, const ComparisonLambda &cmp) -> pageid_t;
+  auto FindChild(std::span<const u8> search_key, leng_t &pos, const ComparisonLambda &cmp) -> pageid_t;
 
   // Debugging purposes
   auto ToString() -> std::string;
@@ -189,8 +189,8 @@ class alignas(PAGE_SIZE) BTreeNodeImpl : public PageHeader {
   void SearchHint(const std::array<u8, 4> &key_head, leng_t &out_lower_bound, leng_t &out_upper_bound);
 
   // Search utilities
-  auto LowerBound(std::span<u8> search_key, bool &exact_found, const ComparisonLambda &cmp) -> leng_t;
-  auto LowerBound(std::span<u8> search_key, const ComparisonLambda &cmp) -> leng_t;
+  auto LowerBound(std::span<const u8> search_key, bool &exact_found, const ComparisonLambda &cmp) -> leng_t;
+  auto LowerBound(std::span<const u8> search_key, const ComparisonLambda &cmp) -> leng_t;
 
   // Store/Insert/Remove utilities
   void StoreRecordData(leng_t slot_id, std::span<u8> key, std::span<const u8> payload);

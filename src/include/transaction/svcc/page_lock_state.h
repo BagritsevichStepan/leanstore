@@ -131,7 +131,7 @@ void PageLockState::Evict(SpillFn &&spill) {
 
   Ensure(state_ == State::IN_MEMORY);
 
-  if (table_ != nullptr && !table_->Empty()) {
+  if (table_ != nullptr && !table_->IsEmpty()) {
     spill(*table_);
     state_ = State::EVICTED_WITH_LOCKS;
   } else {
@@ -155,7 +155,7 @@ void PageLockState::Restore(RestoreFn &&restore) {
     table_ = std::make_unique<PageLockTable>();
     restore(*table_);
   }
-  
+
   state_ = State::IN_MEMORY;
 }
 

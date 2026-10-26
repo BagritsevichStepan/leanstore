@@ -2,76 +2,61 @@
 #include "common/exceptions.h"
 #include "leanstore/leanstore.h"
 
+#include <cstring>
+
 namespace leanstore::transaction::svcc {
 
-thread_local InPageLockManager::ReadSet InPageLockManager::read_set;
-thread_local InPageLockManager::WriteSet InPageLockManager::write_set;
+thread_local InPageLockManager::HeldLocks InPageLockManager::held_locks;
+thread_local detail::TxnArena InPageLockManager::arena;
 
-auto InPageLockManager::EmptyLocalSet() -> bool {
-  return read_set.empty() && write_set.empty();
+namespace {
+
+auto CopyTuple(detail::TxnArena &arena, const LockableTuple &tuple) -> const LockableTuple * {
+  auto copy = reinterpret_cast<LockableTuple *>(arena.Allocate(sizeof(LockableTuple) + tuple.key_len,
+                                                               alignof(LockableTuple)));
+  copy->tree_id = tuple.tree_id;
+  copy->key_len = tuple.key_len;
+  std::memcpy(copy->key, tuple.key, tuple.key_len);
+  return copy;
 }
 
-void InPageLockManager::ReleaseAllLocks(const UndoCallback &undo_cb, const ReleaseLockCallback &release_lock_cb) {
-  for (auto &[tuple, leaf] : read_set) {
-    release_lock_cb(tuple, leaf, false);
-  }
-
-  // The undo (abort) runs while the key is still in the write set: it re-locks its own key
-  for (auto &[tuple, entry] : write_set) {
-    undo_cb(tuple, std::span<const u8>(entry.undo_payload));
-    release_lock_cb(tuple, entry.leaf, true);
-  }
-
-  auto release_tuples = [](auto &set) {
-    for (auto &entry : set) {
-      LockableTuple::Release(entry.first);
-    }
-    set.clear();
-    if (set.bucket_count() > MAX_IDLE_BUCKETS) {
-      set.rehash(0);
-    }
-  };
-
-  release_tuples(read_set);
-  release_tuples(write_set);
-}
+} // namespace
 
 auto InPageLockManager::TryLockShared(const LockableTuple *key, PageLockTable &page_lock_table, pageid_t page_id)
   -> bool {
-  if (read_set.contains(key) || write_set.contains(key)) {
+  const auto hash = held_locks.hash(key);
+  if (held_locks.find(key, hash) != held_locks.end()) {
     return true;
   }
 
-  if (!page_lock_table.TryAcquire(key->KeyView(), LeanStore::worker_thread_id, false)) {
+  if (!page_lock_table.TryAcquire({key->key, key->key_len}, LeanStore::worker_thread_id, false)) {
     return false;
   }
 
-  read_set.emplace(LockableTuple::Constructor(*key), page_id);
+  held_locks.emplace_with_hash(hash, CopyTuple(arena, *key), HeldLock{page_id, false, {}});
   return true;
 }
 
 auto InPageLockManager::TryLock(std::span<u8> undo_payload, const LockableTuple *key, PageLockTable &page_lock_table,
                                 pageid_t page_id) -> bool {
-  if (write_set.contains(key)) {
+  const auto hash = held_locks.hash(key);
+
+  auto held_lock = held_locks.find(key, hash);
+  if (held_lock != held_locks.end() && held_lock->second.exclusive) {
     return true;
   }
 
-  // Upgrade if we already hold a shared lock on this key
-  auto shared_lock_it = read_set.find(key);
-  const bool holds_shared = (shared_lock_it != read_set.end());
-  if (!page_lock_table.TryAcquire(key->KeyView(), LeanStore::worker_thread_id, true, holds_shared)) {
+  const bool holds_shared = (held_lock != held_locks.end());
+  if (!page_lock_table.TryAcquire({key->key, key->key_len}, LeanStore::worker_thread_id, true, holds_shared)) {
     return false;
   }
 
-  LockableTuple *own_tuple;
   if (holds_shared) {
-    own_tuple = shared_lock_it->first;
-    read_set.erase(shared_lock_it);
+    held_lock->second = HeldLock{page_id, true, arena.Copy(undo_payload)};
   } else {
-    own_tuple = LockableTuple::Constructor(*key);
+    held_locks.emplace_with_hash(hash, CopyTuple(arena, *key), HeldLock{page_id, true, arena.Copy(undo_payload)});
   }
 
-  write_set.emplace(own_tuple, WriteEntry{page_id, std::vector<u8>(undo_payload.begin(), undo_payload.end())});
   return true;
 }
 
