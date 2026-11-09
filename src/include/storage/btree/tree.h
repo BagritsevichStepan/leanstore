@@ -20,7 +20,7 @@ namespace leanstore::storage {
 
 class BTree : public KVInterface {
  public:
-  BTree(buffer::BufferManager *buffer_pool, u32 tree_slot);
+  BTree(buffer::BufferManager *buffer_pool, u32 tree_slot, bool system = false);
   ~BTree() override = default;
 
   /* BTree config*/
@@ -37,6 +37,8 @@ class BTree : public KVInterface {
   auto UpdateInPlace(std::span<u8> key, const ModifyPayloadFunc &func, FixedSizeDelta *delta) -> OpResult override;
   auto ScanAscending(std::span<u8> key, const AccessRecordFunc &fn) -> OpResult override;
   auto ScanDescending(std::span<u8> key, const AccessRecordFunc &fn) -> OpResult override;
+  auto ExtractAscending(std::span<u8> key, const KeyPredicateFunc &matches, const AccessRecordFunc &consume)
+    -> OpResult override;
   auto CountEntries() -> u64 override;
   auto SizeInMB() -> float override;
   auto LookUpBlob(std::span<const u8> blob_key, const ComparisonLambda &cmp, const AccessPayloadFunc &read_cb)
@@ -58,6 +60,13 @@ class BTree : public KVInterface {
                        const std::function<u64(BTreeNode &)> &leaf_fn) -> u64;
   auto IterateUntils(sync::OptimisticGuard<BTreeNode> &node, const std::function<bool(BTreeNode &)> &inner_fn,
                      const std::function<bool(BTreeNode &)> &leaf_fn) -> bool;
+
+  void InitRoot(sync::ExclusiveGuard<MetadataPage> &meta_page);
+  auto IsWalEnabled() const -> bool;
+
+  auto IsMvcc() const -> bool;
+  auto IsSvccLockTable() const -> bool;
+  auto IsSvccInPageLock() const -> bool;
 
   /* Find Leaf Node storing the key */
   auto FindLeafOptimisticWithParent(std::span<u8> key)
@@ -86,13 +95,13 @@ class BTree : public KVInterface {
     std::memcpy(key + node->header.prefix_len, node->GetKey(pos), node->slots[pos].key_length);
     auto key_span = std::span<u8>{key, key_len};
     // Concurrency Control
-    if (!node.TryLockShared(metadata_slotid_, key_span)) { return OpResult::ABORT_TX; }
+    if (!system_ && !node.TryLockShared(metadata_slotid_, key_span)) { return OpResult::ABORT_TX; }
 
     // Actual scan read
     auto payload = node->GetPayload(pos);
     auto &txn    = transaction::Transaction::active_txn;
 
-    if (transaction::IsMvcc() && txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
+    if (IsMvcc() && txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
       LOCKABLE_TUPLE_STACK(lockable, key_span, metadata_slotid_);
       auto latest_tuple_ts = node->GetTimestamp(pos);
       if (txn.start_ts < latest_tuple_ts) {
@@ -122,6 +131,8 @@ class BTree : public KVInterface {
   /* Core properties */
   buffer::BufferManager *buffer_;
   leng_t metadata_slotid_;
+  pageid_t metadata_pid_;
+  bool system_;
 
   /* Comparison properties */
   ComparisonLambda cmp_lambda_{ComparisonOperator::MEMCMP, std::memcmp};

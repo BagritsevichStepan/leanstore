@@ -18,6 +18,11 @@ DEFINE_uint32(txn_rate, 0, "Limit transaction rate in second for latency checkin
 DEFINE_uint64(bm_virtual_gb, 4, "Size of virtual memory in GB");
 DEFINE_uint64(bm_physical_gb, 1, "Size of physical memory in GB");
 DEFINE_uint64(bm_alias_block_mb, 1024, "Size of worker-local aliasing area in MB");
+DEFINE_uint64(bm_system_virtual_gb, 1,
+              "SVCC in-page locking: size of the system pages (the B-tree of the locks of evicted pages) in GB, "
+              "the most it may grow to on disk. On top of bm_virtual_gb");
+DEFINE_uint64(bm_system_physical_mb, 4,
+              "SVCC in-page locking: memory of the system pages in MB, on top of bm_physical_gb");
 DEFINE_uint64(bm_evict_batch_size, 64, "Expected number of pages to be evicted during each eviction");
 DEFINE_bool(bm_enable_fair_eviction, true,
             "Whether to use fair extent eviction policy or not"

@@ -13,6 +13,8 @@ DECLARE_uint32(txn_rate);
 // -------------------------------------------------------------------------------------
 DECLARE_uint64(bm_virtual_gb);
 DECLARE_uint64(bm_alias_block_mb);
+DECLARE_uint64(bm_system_virtual_gb);
+DECLARE_uint64(bm_system_physical_mb);
 DECLARE_uint64(bm_evict_batch_size);
 DECLARE_bool(bm_enable_fair_eviction);
 // -------------------------------------------------------------------------------------

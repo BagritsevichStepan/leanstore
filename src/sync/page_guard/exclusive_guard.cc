@@ -9,10 +9,20 @@
 
 namespace leanstore::sync {
 
+namespace {
+
+void MarkActiveTransactionAsWrite(buffer::BufferManager *buffer, pageid_t pid) {
+  if (!buffer->IsSystemPage(pid)) {
+    TM::active_txn.MarkAsWrite();
+  }
+}
+
+} // namespace
+
 template <class PageClass>
 ExclusiveGuard<PageClass>::ExclusiveGuard(buffer::BufferManager *buffer, pageid_t pid)
     : PageGuard<PageClass>(buffer, pid, GuardMode::EXCLUSIVE) {
-  TM::active_txn.MarkAsWrite();
+  MarkActiveTransactionAsWrite(buffer, pid);
   buffer->FixExclusive(pid);
   this->DetectGSNDependency();
 }
@@ -26,7 +36,7 @@ template <class PageClass>
 ExclusiveGuard<PageClass>::ExclusiveGuard(buffer::BufferManager *buffer, storage::Page *alloc_page)
     : PageGuard<PageClass>(buffer, buffer->ToPID(alloc_page), GuardMode::EXCLUSIVE) {
   assert(buffer->GetPageState(buffer->ToPID(alloc_page)).LockState() == sync::PageState::EXCLUSIVE);
-  TM::active_txn.MarkAsWrite();
+  MarkActiveTransactionAsWrite(buffer, this->page_id_);
   this->DetectGSNDependency();
 }
 
@@ -51,7 +61,7 @@ ExclusiveGuard<PageClass>::ExclusiveGuard(OptimisticGuard<PageClass> &&other) no
     }
     AsmYield(cnt);
   }
-  TM::active_txn.MarkAsWrite();
+  MarkActiveTransactionAsWrite(this->buffer_, this->page_id_);
   this->DetectGSNDependency();
 }
 

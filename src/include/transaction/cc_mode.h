@@ -16,6 +16,6 @@ inline auto IsMvcc() -> bool { return FLAGS_txn_mvcc; }
 inline auto IsSvccLockTable() -> bool { return !FLAGS_txn_mvcc && !FLAGS_txn_lock_inpage; }
 
 /* Single-version 2PL (No-Wait): lock state in a lock table per B-tree leaf, see svcc::PageLockTable */
-inline auto IsSvccInPageLock() -> bool { return !FLAGS_txn_mvcc && FLAGS_txn_lock_inpage; }
+inline auto IsSvccInPageLock() -> bool { return FLAGS_txn_lock_inpage; }
 
 }  // namespace leanstore::transaction

@@ -3,19 +3,20 @@
 #include "buffer/alias_area.h"
 #include "buffer/buffer_frame.h"
 #include "buffer/resident_set.h"
+#include "buffer/system_page_pool.h"
 #include "common/typedefs.h"
 #include "storage/aio.h"
 #include "storage/extent/large_page.h"
 #include "storage/free_storage.h"
 #include "storage/page.h"
 #include "sync/page_state.h"
-#include "transaction/svcc/evicted_lock_store.h"
 
 #include "gtest/gtest_prod.h"
 
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <atomic>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -24,7 +25,12 @@ class LeanStore;
 
 namespace transaction {
 class Transaction;
-}
+
+namespace svcc {
+class EvictedLockStore;
+} // namespace svcc
+
+} // namespace transaction
 
 namespace storage::blob {
 class BlobManager;
@@ -61,16 +67,18 @@ class BufferManager {
   void MarkModified(pageid_t page_id);
   auto BufferFramePage(pageid_t page_id) -> buffer::BufferFrame &;
   auto EvictedLocks() -> transaction::svcc::EvictedLockStore &;
-  /* SVCC in-page locking: give the page a lock state, called for every leaf when it is created */
+  /* Give the page a lock state, called for every leaf when it is created */
   void InitLockState(pageid_t page_id);
+  auto IsSystemPage(pageid_t page_id) -> bool;
   void ChunkOperation(pageid_t start_pid, u64 no_bytes, const std::function<void(u64, std::span<u8>)> &func);
 
   // Main page life-cycle
   void EnsureFreePages();
-  auto AllocPage() -> storage::Page *;
+  auto AllocPage(bool system = false) -> storage::Page *;
   void HandlePageFault(pageid_t page_id);
   void ReadPage(pageid_t page_id);
   void Evict();
+  void EvictAllPages();
 
   // Extent utilities
   auto AllocExtent(extidx_t tier) -> pageid_t;
@@ -89,6 +97,7 @@ class BufferManager {
   static constexpr u8 NO_BLOCKS_PER_LOCK = sizeof(u64) * CHAR_BIT;
   static constexpr u64 URING_NO_ENTRIES  = 64;
 
+  friend class SystemPagePool;
   friend class leanstore::transaction::Transaction;
   friend class leanstore::storage::blob::BlobManager;
   friend struct leanstore::storage::blob::AliasingGuard;
@@ -144,8 +153,15 @@ class BufferManager {
   u64 extent_virtual_size_; /* Total size of the extent buffer manager, similar to virtual_size_ */
   u64 extent_virtual_cnt_;  /* Total page cnt of the extent buffer manager, similar to virtual_cnt_ */
 
+  u64 system_virtual_cnt_;  /* Total page cnt of the system pages, 0 in the other modes */
+
+  u64 total_virtual_cnt_;  /* Page cnt of the main, the system and the extent pages */
+
+  /* The system pages, the last pids of the buffer pool */
+  std::unique_ptr<SystemPagePool> system_pool_;
+  
   /* SVCC in-page locking: the locks of evicted pages */
-  transaction::svcc::EvictedLockStore evicted_locks_;
+  std::unique_ptr<transaction::svcc::EvictedLockStore> evicted_locks_;
 };
 
 }  // namespace leanstore::buffer

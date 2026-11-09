@@ -8,16 +8,22 @@ namespace leanstore::transaction::svcc {
 /**
  * @brief 2PL lock state of a single key (No-Wait).
  */
-class LockState {
+struct LockState {
  private:
   static constexpr u32 SHARED_MASK = 0xFFFF;
   static constexpr u32 OWNER_SHIFT = 16;
   static constexpr u16 NO_OWNER = 0;
 
-  static auto GetSharedCount(u32 word) -> u32;
-  static auto GetOwnerId(u32 word) -> u16;
+  auto GetSharedCount() const -> u32;
+  auto GetOwnerId() const -> u16;
 
- public:
+  auto TryAcquireShared(wid_t worker_id) -> bool;
+  auto TryAcquireExclusive(wid_t worker_id, bool holds_shared) -> bool;
+
+  void ReleaseShared();
+  void ReleaseExclusive();
+
+ public:  
   /* holds_shared: an upgrade of the caller's shared lock to an exclusive one */
   auto TryAcquire(wid_t worker_id, bool exclusive, bool holds_shared = false) -> bool;
   void Release(bool exclusive);
@@ -25,22 +31,15 @@ class LockState {
   /* Neither shared nor exclusive holders */
   auto IsFree() const -> bool;
 
- private:
-  auto TryAcquireShared(wid_t worker_id) -> bool;
-  auto TryAcquireExclusive(wid_t worker_id, bool holds_shared) -> bool;
-
-  void ReleaseShared();
-  void ReleaseExclusive();
-
-  u32 word_{0};
+  u32 word{0};
 };
 
 // Implementation
-inline auto LockState::GetSharedCount(u32 word) -> u32 {
+inline auto LockState::GetSharedCount() const -> u32 {
   return word & SHARED_MASK;
 }
 
-inline auto LockState::GetOwnerId(u32 word) -> u16 {
+inline auto LockState::GetOwnerId() const -> u16 {
   return static_cast<u16>(word >> OWNER_SHIFT);
 }
 
@@ -57,17 +56,17 @@ inline void LockState::Release(bool exclusive) {
 }
 
 inline void LockState::ReleaseShared() {
-  Ensure(GetSharedCount(word_) > 0);
-  word_--;
+  Ensure(GetSharedCount() > 0);
+  word--;
 }
 
 inline void LockState::ReleaseExclusive() {
-  Ensure(GetOwnerId(word_) != NO_OWNER);
-  word_ &= SHARED_MASK;
+  Ensure(GetOwnerId() != NO_OWNER);
+  word &= SHARED_MASK;
 }
 
 inline auto LockState::IsFree() const -> bool {
-  return word_ == 0;
+  return word == 0;
 }
 
 }  // namespace leanstore::transaction::svcc

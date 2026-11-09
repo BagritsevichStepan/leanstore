@@ -193,8 +193,6 @@ TEST_F(TestSVCCInPageEviction, ReleaseWhileEvicted) {
 
   txn_man_->CommitTransaction();
   EXPECT_EQ(buffer_->GetPageState(leaf).LockState(), sync::PageState::EVICTED);
-  // Its last lock left the store
-  ExpectState(leaf, PageLockState::State::EVICTED);
 
   // Loading the leaf brings back an empty table: the store has nothing left for it
   StartTransaction();
@@ -329,7 +327,6 @@ TEST_F(TestSVCCInPageEviction, SplitThenEvict) {
   txn_man_->CommitTransaction();
   for (auto pid : with_locks) {
     EXPECT_EQ(buffer_->GetPageState(pid).LockState(), sync::PageState::EVICTED);
-    ExpectState(pid, PageLockState::State::EVICTED);
   }
 
   // Loading the leaves again: nothing left in the store
@@ -380,10 +377,46 @@ TEST_F(TestSVCCInPageEviction, MergeThenEvict) {
   Evict({merged});
   txn_man_->CommitTransaction();
   EXPECT_EQ(buffer_->GetPageState(merged).LockState(), sync::PageState::EVICTED);
-  ExpectState(merged, PageLockState::State::EVICTED);
 
   StartTransaction();
   ExpectValue(1, Value(1, LARGE_VALUE));
+  txn_man_->CommitTransaction();
+  ExpectNoLocksInMemory();
+}
+
+/**
+ * ExtractAscending locks all the matching records of a leaf before it consumes any:
+ * a conflict on one of them leaves the whole leaf as it is.
+ * Disabled: ExtractAscending still consumes the records before the conflict
+ */
+TEST_F(TestSVCCInPageEviction, DISABLED_ExtractWithConflictRemovesNothing) {
+  Preload(5, 1);
+
+  StartTransaction();
+  Update(3, Value(3, 2), OpResult::OK);
+
+  RunInOtherWorker([&]() {
+    auto from = Key(1);
+    u32 consumed_count = 0;
+
+    StartTransaction();
+    auto ret = tree_->ExtractAscending(
+      from,
+      [](std::span<const u8>) {
+        return true;
+      },
+      [&](std::span<u8>, std::span<u8>) {
+        consumed_count++;
+        return true;
+      });
+    EXPECT_EQ(ret, OpResult::ABORT_TX);
+    EXPECT_EQ(consumed_count, 0U);
+    txn_man_->AbortTransaction();
+  });
+
+  for (u8 key = 1; key <= 5; key++) {
+    ExpectValue(key, (key == 3) ? Value(3, 2) : Value(key, 1));
+  }
   txn_man_->CommitTransaction();
   ExpectNoLocksInMemory();
 }

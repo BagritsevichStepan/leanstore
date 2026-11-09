@@ -271,7 +271,7 @@ auto LeanStore::DBSize() -> float {
 void LeanStore::DropCache() {
   worker_pool.ScheduleSyncJob(0, [&]() {
     spdlog::info("Dropping the cache");
-    while (buffer_pool->physical_used_cnt_ > 0) { buffer_pool->Evict(); }
+    buffer_pool->EvictAllPages();
     spdlog::info("Complete cleaning the cache. Buffer size: {}", buffer_pool->physical_used_cnt_.load());
   });
 }

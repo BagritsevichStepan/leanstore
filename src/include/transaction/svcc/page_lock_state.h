@@ -40,8 +40,6 @@ class PageLockState {
     
 
     void Retire();
-    /* EVICTED_WITH_LOCKS -> EVICTED */
-    void DropEvictedLocks();
 
    private:
     PageLockState &owner_;
@@ -110,11 +108,6 @@ inline void PageLockState::Guard::Retire() {
   Ensure(IsInMemory());
   owner_.table_.reset();
   owner_.state_ = State::RETIRED;
-}
-
-inline void PageLockState::Guard::DropEvictedLocks() {
-  Ensure(IsEvictedWithLocks());
-  owner_.state_ = State::EVICTED;
 }
 
 inline auto PageLockState::Lock() -> Guard {

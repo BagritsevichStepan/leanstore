@@ -143,7 +143,7 @@ TEST(PageLockTableTest, ReleasedKeyCanBeLockedAgain) {
   ReleaseExclusive(table, k);
   EXPECT_TRUE(table.IsEmpty());
 
-  // The entry of the key stays with a free lock: it behaves like a new one
+  // The released lock left the table: the key gets a new one
   EXPECT_TRUE(AcquireShared(table, k, 2));
   EXPECT_FALSE(table.IsEmpty());
   EXPECT_FALSE(AcquireExclusive(table, k, 3, false));
@@ -190,7 +190,7 @@ TEST(PageLockTableTest, PrefixesAndLongKeys) {
   EXPECT_TRUE(table.IsEmpty());
 }
 
-TEST(PageLockTableTest, CompactKeepsHeldLocks) {
+TEST(PageLockTableTest, ReleasesKeepOtherHeldLocks) {
   static constexpr int no_keys = 200;
   static constexpr int held_every = 20;
 
@@ -226,7 +226,7 @@ TEST(PageLockTableTest, CompactKeepsHeldLocks) {
     }
   }
 
-  // More than MAX_FREE_ENTRIES releases: the free entries are erased on the way
+  // Every release of a last holder erases the entry of its key
   for (int idx = 0; idx < no_keys; idx++) {
     if (!is_held(idx)) {
       ReleaseShared(table, key_of(idx));
@@ -236,15 +236,10 @@ TEST(PageLockTableTest, CompactKeepsHeldLocks) {
   EXPECT_FALSE(table.IsEmpty());
   check();
 
-  table.Compact();
-  check();
-
   for (int idx = 0; idx < no_keys; idx += held_every) {
     ReleaseExclusive(table, key_of(idx));
   }
 
-  EXPECT_TRUE(table.IsEmpty());
-  table.Compact();
   EXPECT_TRUE(table.IsEmpty());
 }
 

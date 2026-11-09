@@ -11,6 +11,7 @@
 #include "storage/aio.h"
 #include "storage/blob/blob_state.h"
 #include "transaction/cc_mode.h"
+#include "transaction/svcc/evicted_lock_store.h"
 
 #include "cpptrace/cpptrace.hpp"
 #include "fmt/ranges.h"
@@ -73,7 +74,9 @@ BufferManager::BufferManager(std::atomic<bool> &keep_running)
       resident_set_(physical_cnt_),
       free_storage_(std::make_unique<storage::FreeStorageManager>()),
       extent_virtual_size_((FLAGS_blob_buffer_pool_gb == 0) ? virtual_size_ : FLAGS_blob_buffer_pool_gb * GB),
-      extent_virtual_cnt_(extent_virtual_size_ / PAGE_SIZE) {
+      extent_virtual_cnt_(extent_virtual_size_ / PAGE_SIZE),
+      system_virtual_cnt_(SystemPagePool::VirtualCount()),
+      total_virtual_cnt_(virtual_cnt_ + system_virtual_cnt_ + extent_virtual_cnt_) {
   Construction();
 }
 
@@ -90,7 +93,9 @@ BufferManager::BufferManager(u64 virtual_page_count, u64 physical_page_count, u6
       resident_set_(physical_cnt_),
       free_storage_(std::make_unique<storage::FreeStorageManager>()),
       extent_virtual_size_((FLAGS_blob_buffer_pool_gb == 0) ? virtual_size_ : FLAGS_blob_buffer_pool_gb * GB),
-      extent_virtual_cnt_(extent_virtual_size_ / PAGE_SIZE) {
+      extent_virtual_cnt_(extent_virtual_size_ / PAGE_SIZE),
+      system_virtual_cnt_(SystemPagePool::VirtualCount()),
+      total_virtual_cnt_(virtual_cnt_ + system_virtual_cnt_ + extent_virtual_cnt_) {
   Construction();
 }
 
@@ -107,8 +112,9 @@ BufferManager::~BufferManager() {
  *
  * The virtual memory area comprises of three main components
  *
- * - Main buffer manager (virtual_size_ + PAGE_SIZE):
+ * - Main buffer manager (virtual_size_ + system pages + PAGE_SIZE):
  *  + bm:   the buffer pool manager (vmcache)
+ *  + sys:  the system pages (SVCC in-page locking only), pids [virtual_cnt_, virtual_cnt_ + system_virtual_cnt_)
  *  + exp:  extra page, to prevent segfaults during optimistic reads
  *
  * - Extent buffer manager for extent accesses/alloc
@@ -123,9 +129,9 @@ BufferManager::~BufferManager() {
  *  + shalar: shared-area for aliasing, same size with the main buffer pool
  *
  * The virtual memory area, therefore, looks like the following figure:
- *  |--------------------|-----|-----------|----|----|----|----|--------|
- *  | bm (virtual_size_) | exp | extent-bm | wl | wl |....| wl | shalar |
- *  |--------------------|-----|-----------|----|----|----|----|--------|
+ *  |--------------------|-----|-----|-----------|----|----|----|----|--------|
+ *  | bm (virtual_size_) | sys | exp | extent-bm | wl | wl |....| wl | shalar |
+ *  |--------------------|-----|-----|-----------|----|----|----|----|--------|
  *
  * Note that ptrs belong to `wl` and `shalar` are considered INVALID by all components except BlobManager
  * All of the addresses should be PAGE_SIZE aligned
@@ -136,8 +142,7 @@ void BufferManager::Construction() {
   Ensure(blockfd_ > 0);
 
   // Setup virtual memory for vmcache
-  auto virtual_alloc_size =
-    virtual_size_ + PAGE_SIZE + extent_virtual_size_ + alias_size_ * FLAGS_worker_count + virtual_size_;
+  auto virtual_alloc_size = (total_virtual_cnt_ + 1) * PAGE_SIZE + alias_size_ * FLAGS_worker_count + virtual_size_;
 
   // Workers + Page providers + 1 Group Commit thread
   auto no_interfaces = FLAGS_worker_count + FLAGS_page_provider_thread + 1;
@@ -150,12 +155,17 @@ void BufferManager::Construction() {
   for (size_t idx = 0; idx < no_interfaces; idx++) { aio_interface_.emplace_back(blockfd_, mem_); }
 
   // Setup page run-time
-  auto total_pg = virtual_cnt_ + extent_virtual_cnt_;
-  page_state_   = static_cast<sync::PageState *>(AllocHuge((total_pg) * sizeof(sync::PageState)));
-  frame_        = static_cast<BufferFrame *>(AllocHuge((virtual_cnt_ + 1) * sizeof(BufferFrame)));
-  ext_frame_    = static_cast<ExtentFrame *>(AllocHuge((total_pg) * sizeof(ExtentFrame)));
-  area_         = std::make_unique<AliasingArea>(alias_size_, virtual_size_, &mem_[total_pg + 1]);
+  page_state_ = static_cast<sync::PageState *>(AllocHuge(total_virtual_cnt_ * sizeof(sync::PageState)));
+  frame_ = static_cast<BufferFrame *>(AllocHuge((virtual_cnt_ + system_virtual_cnt_ + 1) * sizeof(BufferFrame)));
+  ext_frame_ = static_cast<ExtentFrame *>(AllocHuge(total_virtual_cnt_ * sizeof(ExtentFrame)));
+  area_ = std::make_unique<AliasingArea>(alias_size_, virtual_size_, &mem_[total_virtual_cnt_ + 1]);
   Ensure(page_state_ != MAP_FAILED && frame_ != MAP_FAILED);
+
+  // SVCC in-page locking: the system pages follow the database pages, with their own memory budget
+  if (system_virtual_cnt_ > 0) {
+    system_pool_ = std::make_unique<SystemPagePool>(*this, virtual_cnt_, system_virtual_cnt_);
+    evicted_locks_ = std::make_unique<transaction::svcc::EvictedLockStore>(this);
+  }
 
   // Statistics and summary
   physical_used_cnt_ = 0;
@@ -212,13 +222,13 @@ auto BufferManager::RetrieveLocalRing() -> struct io_uring & {
 auto BufferManager::GetPageState(pageid_t page_id) -> sync::PageState & { return page_state_[page_id]; }
 
 void BufferManager::ValidatePID(pageid_t pid) {
-  if (pid >= virtual_cnt_ + extent_virtual_cnt_) {
+  if (pid >= total_virtual_cnt_) {
     throw std::runtime_error("Page id " + std::to_string(pid) + " is invalid");
   }
 }
 
 auto BufferManager::IsValidPtr(void *page) -> bool {
-  return (page >= mem_) && (page < (mem_ + virtual_size_ + PAGE_SIZE + extent_virtual_size_));
+  return (page >= mem_) && (page < mem_ + total_virtual_cnt_ + 1);
 }
 
 auto BufferManager::ToPID(void *page) -> pageid_t { return reinterpret_cast<storage::Page *>(page) - mem_; }
@@ -228,7 +238,7 @@ auto BufferManager::ToPtr(pageid_t page_id) -> storage::Page * {
   return &mem_[page_id];
 }
 
-auto BufferManager::IsExtent(pageid_t page_id) -> bool { return page_id >= virtual_cnt_ + 1; }
+auto BufferManager::IsExtent(pageid_t page_id) -> bool { return page_id >= virtual_cnt_ + system_virtual_cnt_ + 1; }
 
 auto BufferManager::PageIsDirty(pageid_t page_id) -> bool {
   return frame_[page_id].last_written_gsn < ToPtr(page_id)->p_gsn;
@@ -239,7 +249,7 @@ auto BufferManager::PageIsDirty(pageid_t page_id) -> bool {
  * Without WAL, p_gsn never advances (it stays >= 1 since the allocation): reset last_written_gsn instead
  */
 void BufferManager::MarkModified(pageid_t page_id) {
-  if (FLAGS_wal_enable || IsExtent(page_id)) {
+  if ((FLAGS_wal_enable && !IsSystemPage(page_id)) || IsExtent(page_id)) {
     return;
   }
 
@@ -249,11 +259,15 @@ void BufferManager::MarkModified(pageid_t page_id) {
 auto BufferManager::BufferFramePage(pageid_t page_id) -> buffer::BufferFrame & { return frame_[page_id]; }
 
 auto BufferManager::EvictedLocks() -> transaction::svcc::EvictedLockStore & {
-  return evicted_locks_;
+  return *evicted_locks_;
+}
+
+auto BufferManager::IsSystemPage(pageid_t page_id) -> bool {
+  return system_pool_ != nullptr && system_pool_->Contains(page_id);
 }
 
 void BufferManager::InitLockState(pageid_t page_id) {
-  if (!transaction::IsSvccInPageLock()) {
+  if (!transaction::IsSvccInPageLock() || IsSystemPage(page_id)) {
     return;
   }
 
@@ -292,9 +306,19 @@ void BufferManager::EnsureFreePages() {
  * @brief Allocate a single page
  * Always allocate the page at the end of database for simplicity
  */
-auto BufferManager::AllocPage() -> storage::Page * {
+auto BufferManager::AllocPage(bool system) -> storage::Page * {
+  if (system) {
+    Ensure(system_pool_ != nullptr);
+    return ToPtr(system_pool_->AllocPage());
+  }
+
   pageid_t pid = alloc_cnt_.fetch_add(1, std::memory_order_relaxed);
   ValidatePID(pid);
+
+  if (pid >= virtual_cnt_) {
+    throw leanstore::ex::GenericException("No page ids left for the database: raise --bm_virtual_gb");
+  }
+  
   PAGE_FAULT(pid, 1);
   NEW_ALLOC_PAGE(pid);
   resident_set_.Insert(pid);
@@ -309,6 +333,12 @@ auto BufferManager::AllocPage() -> storage::Page * {
  */
 void BufferManager::HandlePageFault(pageid_t page_id) {
   assert(GetPageState(page_id).LockState() == sync::PageStateMode::EXCLUSIVE);
+
+  if (IsSystemPage(page_id)) {
+    system_pool_->HandlePageFault(page_id);
+    return;
+  }
+
   physical_used_cnt_++;
   EnsureFreePages();
   ReadPage(page_id);
@@ -318,7 +348,7 @@ void BufferManager::HandlePageFault(pageid_t page_id) {
   auto lock_state = IsExtent(page_id) ? nullptr : frame_[page_id].lock_state.get();
   if (lock_state != nullptr) {
     lock_state->Restore([&](transaction::svcc::PageLockTable &table) {
-      evicted_locks_.Restore(page_id, table);
+      evicted_locks_->Restore(page_id, table);
     });
   }
 }
@@ -327,6 +357,16 @@ void BufferManager::ReadPage(pageid_t page_id) {
   [[maybe_unused]] int ret = pread(blockfd_, ToPtr(page_id), PAGE_SIZE, page_id * PAGE_SIZE);
   assert(ret == PAGE_SIZE);
   statistics::buffer::read_cnt++;
+}
+
+void BufferManager::EvictAllPages() {
+  while (physical_used_cnt_ > 0) {
+    Evict();
+  }
+
+  if (system_pool_ != nullptr) {
+    system_pool_->EvictAll();
+  }
 }
 
 void BufferManager::Evict() {
@@ -453,7 +493,7 @@ void BufferManager::Evict() {
     auto lock_state = IsExtent(pid) ? nullptr : frame_[pid].lock_state.get();
     if (lock_state != nullptr) {
       lock_state->Evict([&](transaction::svcc::PageLockTable &table) {
-        evicted_locks_.Spill(pid, table);
+        evicted_locks_->Spill(pid, table);
       });
     }
 
@@ -479,7 +519,7 @@ auto BufferManager::AllocExtent(extidx_t tier) -> pageid_t {
   auto tries = 0UL;
   for (;; tries++) {
     start_pid =
-      RandomGenerator::GetRandU64(virtual_cnt_ + 1, virtual_cnt_ + 1 + extent_virtual_cnt_ - required_page_cnt);
+      RandomGenerator::GetRandU64(virtual_cnt_ + system_virtual_cnt_ + 1, total_virtual_cnt_ + 1 - required_page_cnt);
     auto success = free_storage_->TryLockRange(start_pid, required_page_cnt);
     if (success) { break; }
   }

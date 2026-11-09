@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/exceptions.h"
 #include "common/typedefs.h"
 #include "leanstore/kv_interface.h"
 #include "transaction/svcc/lock_state.h"
@@ -13,12 +14,10 @@
 namespace leanstore::transaction::svcc {
 
 /**
- * @brief Lock table of a single page.
+ * @brief Lock table of a single page. It holds only the held locks: a lock leaves it once it is free.
  */
 class PageLockTable {
  private:
-  static constexpr size_t MAX_FREE_ENTRIES = 120;
-
   using Map = phmap::flat_hash_map<std::string, LockState>;
 
   static auto AsKey(std::span<const u8> key) -> std::string_view;
@@ -38,15 +37,14 @@ class PageLockTable {
   /* Leaf merge of this (left) leaf into `right`: hand every lock over to `right` */
   void MergeInto(PageLockTable &right);
 
-  /* Erases the free entries and shrinks the table, e.g. before it is moved to the store */
-  void Compact();
+  template <typename Fn>
+  void ForEachHeldLock(Fn &&fn) const;
+  void AddLock(std::span<const u8> key, const LockState &lock);
 
  private:
   void ReleaseLock(Map::iterator lock, bool exclusive);
-  void EraseFreeEntries();
 
   Map entries_;
-  size_t free_entry_count_ = 0;  // entries whose lock is free
 };
 
 // Implementation
@@ -55,12 +53,20 @@ inline auto PageLockTable::AsKey(std::span<const u8> key) -> std::string_view {
 }
 
 inline auto PageLockTable::IsEmpty() const -> bool {
-  return entries_.size() == free_entry_count_;
+  return entries_.empty();
 }
 
-inline void PageLockTable::Compact() {
-  EraseFreeEntries();
-  entries_.rehash(0);
+template <typename Fn>
+void PageLockTable::ForEachHeldLock(Fn &&fn) const {
+  for (const auto &[key, lock] : entries_) {
+    fn(std::span<const u8>(reinterpret_cast<const u8 *>(key.data()), key.size()), lock);
+  }
+}
+
+inline void PageLockTable::AddLock(std::span<const u8> key, const LockState &lock) {
+  Ensure(!lock.IsFree());
+  auto result = entries_.try_emplace(std::string(AsKey(key)), lock);
+  Ensure(result.second);
 }
 
 }  // namespace leanstore::transaction::svcc

@@ -64,12 +64,6 @@ auto PageGuard<PageClass>::OwnTuple(leng_t tree_id, std::span<u8> key) -> bool {
 template <class PageClass>
 void PageGuard<PageClass>::ValidateOrRestart([[maybe_unused]] bool auto_moved) {}
 
-/**
- * The lock is taken in the table of this page only if the page did not change since the guard was taken,
- * i.e. the page is still the leaf covering the key. The validation runs under the latch of the page's lock state:
- * whatever moves these locks later (split, merge, eviction) takes the same latch, hence sees the new lock.
- * It never waits: these operations take an X-latch on the page first, then wait for the latch of the lock state
- */
 template <class PageClass>
 template <typename LockFn>
 auto PageGuard<PageClass>::LockInPage(LockFn &&lock) -> bool {
@@ -128,7 +122,7 @@ auto PageGuard<PageClass>::TryLock(leng_t tree_id, timestamp_t tuple_ts, std::sp
 
 template <class PageClass>
 void PageGuard<PageClass>::DetectGSNDependency() {
-  if (FLAGS_wal_enable) {
+  if (FLAGS_wal_enable && !buffer_->IsSystemPage(page_id_)) {
     auto &txn = TM::active_txn;
     Ensure(txn.IsRunning());
     auto &logger = txn.LogWorker();
