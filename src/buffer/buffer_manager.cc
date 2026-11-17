@@ -11,7 +11,7 @@
 #include "storage/aio.h"
 #include "storage/blob/blob_state.h"
 #include "transaction/cc_mode.h"
-#include "transaction/svcc/evicted_lock_store.h"
+#include "transaction/svcc/inpage/evicted_lock_store.h"
 
 #include "cpptrace/cpptrace.hpp"
 #include "fmt/ranges.h"
@@ -164,7 +164,7 @@ void BufferManager::Construction() {
   // SVCC in-page locking: the system pages follow the database pages, with their own memory budget
   if (system_virtual_cnt_ > 0) {
     system_pool_ = std::make_unique<SystemPagePool>(*this, virtual_cnt_, system_virtual_cnt_);
-    evicted_locks_ = std::make_unique<transaction::svcc::EvictedLockStore>(this);
+    evicted_locks_ = std::make_unique<transaction::svcc::inpage::EvictedLockStore>(this);
   }
 
   // Statistics and summary
@@ -258,7 +258,7 @@ void BufferManager::MarkModified(pageid_t page_id) {
 
 auto BufferManager::BufferFramePage(pageid_t page_id) -> buffer::BufferFrame & { return frame_[page_id]; }
 
-auto BufferManager::EvictedLocks() -> transaction::svcc::EvictedLockStore & {
+auto BufferManager::EvictedLocks() -> transaction::svcc::inpage::EvictedLockStore & {
   return *evicted_locks_;
 }
 
@@ -272,7 +272,7 @@ void BufferManager::InitLockState(pageid_t page_id) {
   }
 
   Ensure(!IsExtent(page_id));
-  frame_[page_id].lock_state = std::make_unique<transaction::svcc::PageLockState>();
+  frame_[page_id].lock_state = std::make_unique<transaction::svcc::inpage::PageLockState>();
 }
 
 /**
@@ -347,7 +347,7 @@ void BufferManager::HandlePageFault(pageid_t page_id) {
   // SVCC in-page locking: bring back the locks spilled when the page was evicted
   auto lock_state = IsExtent(page_id) ? nullptr : frame_[page_id].lock_state.get();
   if (lock_state != nullptr) {
-    lock_state->Restore([&](transaction::svcc::PageLockTable &table) {
+    lock_state->Restore([&](transaction::svcc::inpage::PageLockTable &table) {
       evicted_locks_->Restore(page_id, table);
     });
   }
@@ -492,7 +492,7 @@ void BufferManager::Evict() {
     // SVCC in-page locking: spill the locks of the page before it is unlocked, i.e. before it can be loaded again
     auto lock_state = IsExtent(pid) ? nullptr : frame_[pid].lock_state.get();
     if (lock_state != nullptr) {
-      lock_state->Evict([&](transaction::svcc::PageLockTable &table) {
+      lock_state->Evict([&](transaction::svcc::inpage::PageLockTable &table) {
         evicted_locks_->Spill(pid, table);
       });
     }

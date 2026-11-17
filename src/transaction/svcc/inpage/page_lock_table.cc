@@ -1,10 +1,10 @@
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/inpage/page_lock_table.h"
 #include "common/exceptions.h"
 
 #include <algorithm>
 #include <iterator>
 
-namespace leanstore::transaction::svcc {
+namespace leanstore::transaction::svcc::inpage {
 
 namespace {
 
@@ -79,4 +79,4 @@ void PageLockTable::MergeInto(PageLockTable &right) {
   }
 }
 
-}  // namespace leanstore::transaction::svcc
+}  // namespace leanstore::transaction::svcc::inpage

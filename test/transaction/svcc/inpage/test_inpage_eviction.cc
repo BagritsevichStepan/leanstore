@@ -2,7 +2,7 @@
 #include "storage/btree/node.h"
 #include "sync/page_state.h"
 #include "test/base_test.h"
-#include "transaction/svcc/page_lock_state.h"
+#include "transaction/svcc/inpage/page_lock_state.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -14,7 +14,7 @@ namespace leanstore {
 
 using ::testing::ElementsAreArray;
 using transaction::IsolationLevel;
-using transaction::svcc::PageLockState;
+using transaction::svcc::inpage::PageLockState;
 
 /**
  * SVCC in-page locking: the locks of an evicted leaf are spilled to the EvictedLockStore

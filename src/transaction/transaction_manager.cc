@@ -8,7 +8,7 @@
 #include "recovery/log_entry.h"
 #include "storage/btree/tree.h"
 #include "transaction/mvcc/lock_manager.h"
-#include "transaction/svcc/inpage_lock_manager.h"
+#include "transaction/svcc/inpage/inpage_lock_manager.h"
 #include "transaction/svcc/lock_manager.h"
 
 #include "share_headers/time.h"
@@ -61,7 +61,7 @@ TransactionManager::TransactionManager(buffer::BufferManager *buffer_manager, Lo
     lock_manager_          = std::make_unique<svcc::LockManager>();
     background_version_gc_ = std::thread();
   } else {
-    inpage_lock_manager_   = std::make_unique<svcc::InPageLockManager>();
+    inpage_lock_manager_   = std::make_unique<svcc::inpage::InPageLockManager>();
     background_version_gc_ = std::thread();
   }
 };

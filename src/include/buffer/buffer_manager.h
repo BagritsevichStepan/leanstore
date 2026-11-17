@@ -26,9 +26,9 @@ class LeanStore;
 namespace transaction {
 class Transaction;
 
-namespace svcc {
+namespace svcc::inpage {
 class EvictedLockStore;
-} // namespace svcc
+} // namespace svcc::inpage
 
 } // namespace transaction
 
@@ -66,7 +66,7 @@ class BufferManager {
   auto PageIsDirty(pageid_t page_id) -> bool;
   void MarkModified(pageid_t page_id);
   auto BufferFramePage(pageid_t page_id) -> buffer::BufferFrame &;
-  auto EvictedLocks() -> transaction::svcc::EvictedLockStore &;
+  auto EvictedLocks() -> transaction::svcc::inpage::EvictedLockStore &;
   /* Give the page a lock state, called for every leaf when it is created */
   void InitLockState(pageid_t page_id);
   auto IsSystemPage(pageid_t page_id) -> bool;
@@ -161,7 +161,7 @@ class BufferManager {
   std::unique_ptr<SystemPagePool> system_pool_;
   
   /* SVCC in-page locking: the locks of evicted pages */
-  std::unique_ptr<transaction::svcc::EvictedLockStore> evicted_locks_;
+  std::unique_ptr<transaction::svcc::inpage::EvictedLockStore> evicted_locks_;
 };
 
 }  // namespace leanstore::buffer

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/typedefs.h"
-#include "transaction/svcc/page_lock_state.h"
+#include "transaction/svcc/inpage/page_lock_state.h"
 
 #include <atomic>
 #include <bitset>
@@ -17,7 +17,7 @@ struct BufferFrame {
   u64 last_written_gsn;  // the last gsn that this extent/page was written to storage
 
   // SVCC in-page locking: nullptr if the page holds no locks
-  std::unique_ptr<transaction::svcc::PageLockState> lock_state;
+  std::unique_ptr<transaction::svcc::inpage::PageLockState> lock_state;
 
   void Init();
 };

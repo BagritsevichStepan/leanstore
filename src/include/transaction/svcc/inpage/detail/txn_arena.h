@@ -7,7 +7,7 @@
 #include <span>
 #include <vector>
 
-namespace leanstore::transaction::svcc::detail {
+namespace leanstore::transaction::svcc::inpage::detail {
 
 /**
  * Bump allocator of a worker for the data of its running transaction, e.g. the copies of the locked keys.
@@ -77,4 +77,4 @@ inline void TxnArena::Reset() {
   offset_ = 0;
 }
 
-}  // namespace leanstore::transaction::svcc::detail
+}  // namespace leanstore::transaction::svcc::inpage::detail

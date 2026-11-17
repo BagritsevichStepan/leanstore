@@ -4,11 +4,11 @@
 #include "common/typedefs.h"
 #include "sync/hybrid_guard.h"
 #include "sync/hybrid_latch.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/inpage/page_lock_table.h"
 
 #include <memory>
 
-namespace leanstore::transaction::svcc {
+namespace leanstore::transaction::svcc::inpage {
 
 /**
  * @brief Lock state of a single page that holds locks (SVCC in-page locking).
@@ -152,4 +152,4 @@ void PageLockState::Restore(RestoreFn &&restore) {
   state_ = State::IN_MEMORY;
 }
 
-}  // namespace leanstore::transaction::svcc
+}  // namespace leanstore::transaction::svcc::inpage

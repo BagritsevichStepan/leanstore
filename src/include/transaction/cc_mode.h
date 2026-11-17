@@ -15,7 +15,7 @@ inline auto IsMvcc() -> bool { return FLAGS_txn_mvcc; }
 /* Single-version 2PL: lock state in an external hash table, nothing of it lives in the page */
 inline auto IsSvccLockTable() -> bool { return !FLAGS_txn_mvcc && !FLAGS_txn_lock_inpage; }
 
-/* Single-version 2PL (No-Wait): lock state in a lock table per B-tree leaf, see svcc::PageLockTable */
+/* Single-version 2PL (No-Wait): lock state in a lock table per B-tree leaf, see svcc::inpage::PageLockTable */
 inline auto IsSvccInPageLock() -> bool { return FLAGS_txn_lock_inpage; }
 
 }  // namespace leanstore::transaction

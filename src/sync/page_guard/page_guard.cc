@@ -7,9 +7,9 @@
 #include "transaction/lockable_tuple.h"
 #include "transaction/cc_mode.h"
 #include "transaction/mvcc/lock_manager.h"
-#include "transaction/svcc/inpage_lock_manager.h"
-#include "transaction/svcc/page_lock_state.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/inpage/inpage_lock_manager.h"
+#include "transaction/svcc/inpage/page_lock_state.h"
+#include "transaction/svcc/inpage/page_lock_table.h"
 
 #include <stdexcept>
 #include <type_traits>
@@ -91,7 +91,7 @@ auto PageGuard<PageClass>::TryLockShared(leng_t tree_id, std::span<u8> key) -> b
     }
 
     if (transaction::IsSvccInPageLock()) {
-      return LockInPage([&](transaction::svcc::PageLockTable &table) {
+      return LockInPage([&](transaction::svcc::inpage::PageLockTable &table) {
         return txn.InPageLockManager()->TryLockShared(lockable, table, page_id_);
       });
     }
@@ -110,7 +110,7 @@ auto PageGuard<PageClass>::TryLock(leng_t tree_id, timestamp_t tuple_ts, std::sp
     LOCKABLE_TUPLE_STACK(lockable, key, tree_id);
     
     if (transaction::IsSvccInPageLock()) {
-      return LockInPage([&](transaction::svcc::PageLockTable &table) {
+      return LockInPage([&](transaction::svcc::inpage::PageLockTable &table) {
         return txn.InPageLockManager()->TryLock(undo_payload, lockable, table, page_id_);
       }); 
     }

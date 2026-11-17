@@ -3,7 +3,7 @@
 #include "common/exceptions.h"
 #include "common/typedefs.h"
 #include "leanstore/kv_interface.h"
-#include "transaction/svcc/lock_state.h"
+#include "transaction/svcc/inpage/lock_state.h"
 
 #include "parallel_hashmap/phmap.h"
 
@@ -11,7 +11,7 @@
 #include <string>
 #include <string_view>
 
-namespace leanstore::transaction::svcc {
+namespace leanstore::transaction::svcc::inpage {
 
 /**
  * @brief Lock table of a single page. It holds only the held locks: a lock leaves it once it is free.
@@ -69,4 +69,4 @@ inline void PageLockTable::AddLock(std::span<const u8> key, const LockState &loc
   Ensure(result.second);
 }
 
-}  // namespace leanstore::transaction::svcc
+}  // namespace leanstore::transaction::svcc::inpage

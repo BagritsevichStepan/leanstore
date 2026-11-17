@@ -1,6 +1,6 @@
 #include "common/typedefs.h"
-#include "transaction/svcc/page_lock_state.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/inpage/page_lock_state.h"
+#include "transaction/svcc/inpage/page_lock_table.h"
 
 #include "gtest/gtest.h"
 
@@ -10,7 +10,7 @@
 #include <vector>
 
 using namespace leanstore;
-using namespace leanstore::transaction::svcc;
+using namespace leanstore::transaction::svcc::inpage;
 
 static const ComparisonLambda CMP = {ComparisonOperator::MEMCMP, [](const void *a, const void *b, size_t len) {
                                        return std::memcmp(a, b, len);

@@ -1,6 +1,6 @@
 #include "leanstore/kv_interface.h"
-#include "transaction/svcc/page_lock_state.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/inpage/page_lock_state.h"
+#include "transaction/svcc/inpage/page_lock_table.h"
 
 #include <benchmark/benchmark.h>
 
@@ -16,8 +16,8 @@
 
 using leanstore::ComparisonLambda;
 using leanstore::ComparisonOperator;
-using leanstore::transaction::svcc::PageLockState;
-using leanstore::transaction::svcc::PageLockTable;
+using leanstore::transaction::svcc::inpage::PageLockState;
+using leanstore::transaction::svcc::inpage::PageLockTable;
 
 namespace {
 

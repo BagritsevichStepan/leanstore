@@ -2,11 +2,11 @@
 
 #include "common/typedefs.h"
 #include "storage/btree/tree.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/inpage/page_lock_table.h"
 
 #include <span>
 
-namespace leanstore::transaction::svcc {
+namespace leanstore::transaction::svcc::inpage {
 
 /**
  * @brief Locks of evicted pages, one store for all trees of the database.
@@ -29,4 +29,4 @@ class EvictedLockStore {
 
 inline EvictedLockStore::EvictedLockStore(buffer::BufferManager *buffer) : tree_(buffer, 0, true) {}
 
-}  // namespace leanstore::transaction::svcc
+}  // namespace leanstore::transaction::svcc::inpage

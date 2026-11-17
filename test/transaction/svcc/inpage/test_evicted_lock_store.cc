@@ -1,9 +1,9 @@
 #include "buffer/buffer_manager.h"
 #include "common/typedefs.h"
 #include "test/base_test.h"
-#include "transaction/svcc/evicted_lock_store.h"
-#include "transaction/svcc/lock_state.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/inpage/evicted_lock_store.h"
+#include "transaction/svcc/inpage/lock_state.h"
+#include "transaction/svcc/inpage/page_lock_table.h"
 
 #include "gtest/gtest.h"
 
@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-namespace leanstore::transaction::svcc {
+namespace leanstore::transaction::svcc::inpage {
 
 /**
  * SVCC in-page locking: the store of the locks of evicted pages, a tree of system pages.
@@ -215,7 +215,7 @@ TEST_F(TestEvictedLockStore, ConcurrentPages) {
   }
 }
 
-}  // namespace leanstore::transaction::svcc
+}  // namespace leanstore::transaction::svcc::inpage
 
 auto main(int argc, char **argv) -> int {
   ::testing::InitGoogleTest(&argc, argv);

@@ -30,7 +30,7 @@ namespace leanstore::transaction {
 
 class TransactionManager;
 class ILockManager;
-namespace svcc {
+namespace svcc::inpage {
 class InPageLockManager;
 }
 
@@ -77,7 +77,7 @@ class Transaction {
   auto LogWorker() -> recovery::LogWorker &;
   auto BufferPool() -> buffer::BufferManager *;
   auto LockManager() -> transaction::ILockManager *;
-  auto InPageLockManager() -> transaction::svcc::InPageLockManager *;
+  auto InPageLockManager() -> transaction::svcc::inpage::InPageLockManager *;
 
   // Txn context - public interfaces
   auto TxnID() -> txnid_t { return start_ts; }

@@ -1,7 +1,7 @@
 #include "leanstore/leanstore.h"
 #include "transaction/lockable_tuple.h"
-#include "transaction/svcc/inpage_lock_manager.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/inpage/inpage_lock_manager.h"
+#include "transaction/svcc/inpage/page_lock_table.h"
 
 #include <benchmark/benchmark.h>
 
@@ -15,8 +15,8 @@
 
 using leanstore::LeanStore;
 using leanstore::transaction::LockableTuple;
-using leanstore::transaction::svcc::InPageLockManager;
-using leanstore::transaction::svcc::PageLockTable;
+using leanstore::transaction::svcc::inpage::InPageLockManager;
+using leanstore::transaction::svcc::inpage::PageLockTable;
 
 namespace {
 

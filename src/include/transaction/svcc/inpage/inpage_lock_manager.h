@@ -3,14 +3,14 @@
 #include "common/exceptions.h"
 #include "common/typedefs.h"
 #include "transaction/lockable_tuple.h"
-#include "transaction/svcc/detail/txn_arena.h"
-#include "transaction/svcc/page_lock_table.h"
+#include "transaction/svcc/inpage/detail/txn_arena.h"
+#include "transaction/svcc/inpage/page_lock_table.h"
 
 #include "parallel_hashmap/phmap.h"
 
 #include <span>
 
-namespace leanstore::transaction::svcc {
+namespace leanstore::transaction::svcc::inpage {
 
 /**
  * @brief SVCC 2PL (No-Wait) whose locks live in per-leaf PageLockTables instead of one global lock table.
@@ -73,4 +73,4 @@ void InPageLockManager::ReleaseAllLocks(UndoFn &&undo_cb, ReleaseLockFn &&releas
   arena.Reset();
 }
 
-}  // namespace leanstore::transaction::svcc
+}  // namespace leanstore::transaction::svcc::inpage

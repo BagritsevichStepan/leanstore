@@ -4,8 +4,8 @@
 #include "common/utils.h"
 #include "leanstore/env.h"
 #include "storage/blob/blob_manager.h"
-#include "transaction/svcc/evicted_lock_store.h"
-#include "transaction/svcc/page_lock_state.h"
+#include "transaction/svcc/inpage/evicted_lock_store.h"
+#include "transaction/svcc/inpage/page_lock_state.h"
 #include "transaction/transaction.h"
 
 #include <cstring>

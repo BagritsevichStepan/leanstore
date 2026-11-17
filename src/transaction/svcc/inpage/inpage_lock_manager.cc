@@ -1,10 +1,10 @@
-#include "transaction/svcc/inpage_lock_manager.h"
+#include "transaction/svcc/inpage/inpage_lock_manager.h"
 #include "common/exceptions.h"
 #include "leanstore/leanstore.h"
 
 #include <cstring>
 
-namespace leanstore::transaction::svcc {
+namespace leanstore::transaction::svcc::inpage {
 
 thread_local InPageLockManager::HeldLocks InPageLockManager::held_locks;
 thread_local detail::TxnArena InPageLockManager::arena;
@@ -60,4 +60,4 @@ auto InPageLockManager::TryLock(std::span<u8> undo_payload, const LockableTuple 
   return true;
 }
 
-}  // namespace leanstore::transaction::svcc
+}  // namespace leanstore::transaction::svcc::inpage

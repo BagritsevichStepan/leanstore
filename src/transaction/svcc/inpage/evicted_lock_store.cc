@@ -1,11 +1,11 @@
-#include "transaction/svcc/evicted_lock_store.h"
+#include "transaction/svcc/inpage/evicted_lock_store.h"
 #include "common/exceptions.h"
 
 #include <endian.h>
 #include <algorithm>
 #include <cstring>
 
-namespace leanstore::transaction::svcc {
+namespace leanstore::transaction::svcc::inpage {
 
 namespace {
 
@@ -91,4 +91,4 @@ void EvictedLockStore::Release(pageid_t pid, std::span<const u8> key, bool exclu
   }
 }
 
-}  // namespace leanstore::transaction::svcc
+}  // namespace leanstore::transaction::svcc::inpage

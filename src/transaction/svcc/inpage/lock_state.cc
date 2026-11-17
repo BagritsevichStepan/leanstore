@@ -1,6 +1,6 @@
-#include "transaction/svcc/lock_state.h"
+#include "transaction/svcc/inpage/lock_state.h"
 
-namespace leanstore::transaction::svcc {
+namespace leanstore::transaction::svcc::inpage {
 
 namespace {
 
@@ -46,4 +46,4 @@ auto LockState::TryAcquireExclusive(wid_t worker_id, bool holds_shared) -> bool 
   return true;
 }
 
-}  // namespace leanstore::transaction::svcc
+}  // namespace leanstore::transaction::svcc::inpage

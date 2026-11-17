@@ -3,7 +3,7 @@
 #include "common/exceptions.h"
 #include "common/typedefs.h"
 
-namespace leanstore::transaction::svcc {
+namespace leanstore::transaction::svcc::inpage {
 
 /**
  * @brief 2PL lock state of a single key (No-Wait).
@@ -69,4 +69,4 @@ inline auto LockState::IsFree() const -> bool {
   return word == 0;
 }
 
-}  // namespace leanstore::transaction::svcc
+}  // namespace leanstore::transaction::svcc::inpage

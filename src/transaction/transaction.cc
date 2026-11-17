@@ -53,7 +53,7 @@ auto Transaction::BufferPool() -> buffer::BufferManager * { return manager_->buf
 
 auto Transaction::LockManager() -> transaction::ILockManager * { return manager_->lock_manager_.get(); }
 
-auto Transaction::InPageLockManager() -> transaction::svcc::InPageLockManager * {
+auto Transaction::InPageLockManager() -> transaction::svcc::inpage::InPageLockManager * {
   return manager_->inpage_lock_manager_.get();
 }
 
