@@ -59,6 +59,10 @@ DEFINE_bool(txn_mvcc, false,
 DEFINE_bool(txn_lock_inpage, false,
             "SVCC only: keep 2PL (No-Wait) locks in a lock table per B-tree leaf, attached to the leaf's buffer frame,"
             " instead of in one global lock table. Mutually exclusive with txn_mvcc");
+DEFINE_string(txn_inpage_lock_policy, "nowait",
+              "SVCC in-page only: what a transaction does when it meets a conflicting lock"
+              "(nowait: give up at once"
+              "; waitdie: wait if older than the holders of the lock, give up otherwise)");
 DEFINE_string(txn_default_isolation_level, "ru",
               "The serializable mode used in LeanStore, only support two following modes"
               "(ru: READ_UNCOMMITTED, ser: SERIALIZABLE)");
