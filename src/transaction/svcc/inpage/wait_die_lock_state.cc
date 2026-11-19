@@ -96,9 +96,10 @@ class ByteReader {
 
 } // namespace
 
-auto WaitDieLockState::TryAcquire(LockParams params, bool exclusive, bool holds_shared) -> LockResult {
+auto WaitDieLockState::TryAcquire(LockParams params, bool holds_shared) -> LockResult {
   const auto txn_ts = params.txn_ts;
-  const auto lock_mode = exclusive ? (holds_shared ? LockMode::UPGRADE : LockMode::EXCLUSIVE) : LockMode::SHARED;
+  const auto lock_mode =
+    params.exclusive ? (holds_shared ? LockMode::UPGRADE : LockMode::EXCLUSIVE) : LockMode::SHARED;
 
   if (IsFree()) {
     Ensure(lock_mode != LockMode::UPGRADE);

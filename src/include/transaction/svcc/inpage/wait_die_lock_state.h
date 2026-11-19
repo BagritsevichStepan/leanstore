@@ -34,7 +34,7 @@ struct WaiterNode {
 class WaitDieLockState {
  public:
   /* holds_shared: an upgrade of the caller's own shared lock to an exclusive one */
-  auto TryAcquire(LockParams params, bool exclusive, bool holds_shared) -> LockResult;
+  auto TryAcquire(LockParams params, bool holds_shared) -> LockResult;
   auto Release(timestamp_t txn_ts) -> std::vector<wid_t>;
   auto IsFree() const -> bool;
 

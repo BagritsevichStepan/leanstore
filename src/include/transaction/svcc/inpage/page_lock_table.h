@@ -32,8 +32,7 @@ class PageLockTable {
   PageLockTable();
 
   /* Acquires the lock of key, created if absent */
-  auto TryAcquire(std::span<const u8> key, LockParams params, bool exclusive, bool holds_shared = false)
-    -> LockResult;
+  auto TryAcquire(std::span<const u8> key, LockParams params, bool holds_shared = false) -> LockResult;
 
   /* Releases the lock of key, which must be held. Returns the waiters to wake up. */
   auto Release(std::span<const u8> key, timestamp_t txn_ts, bool exclusive) -> std::vector<wid_t>;

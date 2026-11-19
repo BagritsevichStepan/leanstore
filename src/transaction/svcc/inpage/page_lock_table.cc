@@ -24,8 +24,7 @@ auto CompareKeys(std::string_view lhs, std::string_view rhs, const ComparisonLam
 
 } // namespace
 
-auto PageLockTable::TryAcquire(std::span<const u8> key, LockParams params, bool exclusive, bool holds_shared)
-  -> LockResult {
+auto PageLockTable::TryAcquire(std::span<const u8> key, LockParams params, bool holds_shared) -> LockResult {
   auto key_view = AsKey(key);
 
   return std::visit(
@@ -36,7 +35,7 @@ auto PageLockTable::TryAcquire(std::span<const u8> key, LockParams params, bool 
         construct(std::string(key_view), LockState());
       });
 
-      return lock->second.TryAcquire(params, exclusive, holds_shared);
+      return lock->second.TryAcquire(params, holds_shared);
     },
     entries_);
 }

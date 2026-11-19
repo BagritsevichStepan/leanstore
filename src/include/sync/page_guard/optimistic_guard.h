@@ -21,6 +21,8 @@ class OptimisticGuard : public PageGuard<PageClass> {
 
   void Init();
   void ValidateOrRestart(bool auto_moved = true) override;
+  
+  void WaitForInPageLock(wid_t worker_id) override;
 
  protected:
   friend class SharedGuard<PageClass>;

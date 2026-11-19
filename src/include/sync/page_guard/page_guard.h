@@ -99,9 +99,11 @@ class PageGuard {
   void SubmitActiveWalEntry();
 
  protected:
-  /* SVCC in-page locking: runs lock() on the latched lock table of this page */
-  template <typename LockFn>
-  auto LockInPage(LockFn &&lock) -> bool;
+  /* SVCC in-page locking: acquires the lock of key in the lock table of this page */
+  auto LockInPage(const transaction::LockableTuple *key, std::span<u8> undo_payload, bool exclusive) -> bool;
+
+  /* Waits until a holder grants the lock this worker was queued for */
+  virtual void WaitForInPageLock(wid_t worker_id);
 
   buffer::BufferManager *buffer_;  // Buffer Manager
   pageid_t page_id_;               // The ID of the Page

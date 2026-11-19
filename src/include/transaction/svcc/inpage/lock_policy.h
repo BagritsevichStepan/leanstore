@@ -27,6 +27,7 @@ inline auto IsNoWait() -> bool {
 struct LockParams {
   wid_t worker_id;
   timestamp_t txn_ts;
+  bool exclusive;
 };
 
 }  // namespace leanstore::transaction::svcc::inpage

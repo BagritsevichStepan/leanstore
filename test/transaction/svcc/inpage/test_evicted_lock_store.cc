@@ -34,12 +34,12 @@ class TestEvictedLockStore : public BaseTest {
 
     const auto owner = static_cast<u16>(word >> OWNER_SHIFT);
     if (owner != 0) {
-      state.TryAcquire({static_cast<wid_t>(owner - 1), TXN_TS}, true, false);
+      state.TryAcquire({static_cast<wid_t>(owner - 1), TXN_TS, true}, false);
       return state;
     }
 
     for (u32 holder = 0; holder < word; holder++) {
-      state.TryAcquire({static_cast<wid_t>(holder), TXN_TS}, false, false);
+      state.TryAcquire({static_cast<wid_t>(holder), TXN_TS, false}, false);
     }
     return state;
   }

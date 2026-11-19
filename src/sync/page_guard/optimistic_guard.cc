@@ -3,6 +3,7 @@
 #include "storage/btree/node.h"
 #include "storage/page.h"
 #include "sync/page_state.h"
+#include "transaction/svcc/inpage/inpage_lock_manager.h"
 
 #include <stdexcept>
 
@@ -111,6 +112,15 @@ void OptimisticGuard<PageClass>::ValidateOrRestart(bool auto_moved) {
   // The Optimistic check failed.
   // If none throws Optimistic Exception, then we throw it here
   if (std::uncaught_exceptions() == 0) { throw RestartException(); }
+}
+
+template <class PageClass>
+void OptimisticGuard<PageClass>::WaitForInPageLock(wid_t worker_id) {
+  TM::active_txn.InPageLockManager()->WaitUntilGranted(worker_id);
+
+  /* Slow path: the page changed while waiting, the caller descends again and finds the lock already granted.
+   * Fast path: it did not, the caller takes the granted lock from the table of this page */
+  this->ValidateOrRestart(false);
 }
 
 template class OptimisticGuard<storage::Page>;

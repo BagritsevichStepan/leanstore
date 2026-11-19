@@ -16,7 +16,7 @@ namespace leanstore::transaction::svcc::inpage {
 class NoWaitLockState {
  public:
   /* holds_shared: an upgrade of the caller's own shared lock to an exclusive one */
-  auto TryAcquire(LockParams params, bool exclusive, bool holds_shared) -> LockResult;
+  auto TryAcquire(LockParams params, bool holds_shared) -> LockResult;
   void Release(bool exclusive);
   auto IsFree() const -> bool;
 
@@ -43,9 +43,9 @@ class NoWaitLockState {
 };
 
 // Implementation
-inline auto NoWaitLockState::TryAcquire(LockParams params, bool exclusive, bool holds_shared) -> LockResult {
+inline auto NoWaitLockState::TryAcquire(LockParams params, bool holds_shared) -> LockResult {
   const auto owner_id = GetOwnerId(params.worker_id);
-  const bool acquired = exclusive ? TryAcquireExclusive(owner_id, holds_shared) : TryAcquireShared(owner_id);
+  const bool acquired = params.exclusive ? TryAcquireExclusive(owner_id, holds_shared) : TryAcquireShared(owner_id);
   return acquired ? LockResult::ACQUIRED : LockResult::ABORT;
 }
 

@@ -27,11 +27,11 @@ using Key = std::vector<u8>;
 static constexpr timestamp_t TXN_TS = 1;
 
 static auto AcquireShared(PageLockTable &table, const Key &key, wid_t worker_id) -> bool {
-  return table.TryAcquire(key, {worker_id, TXN_TS}, false) == LockResult::ACQUIRED;
+  return table.TryAcquire(key, {worker_id, TXN_TS, false}) == LockResult::ACQUIRED;
 }
 
 static auto AcquireExclusive(PageLockTable &table, const Key &key, wid_t worker_id, bool holds_shared) -> bool {
-  return table.TryAcquire(key, {worker_id, TXN_TS}, true, holds_shared) == LockResult::ACQUIRED;
+  return table.TryAcquire(key, {worker_id, TXN_TS, true}, holds_shared) == LockResult::ACQUIRED;
 }
 
 static void ReleaseShared(PageLockTable &table, const Key &key) {
@@ -45,27 +45,27 @@ static void ReleaseExclusive(PageLockTable &table, const Key &key) {
 TEST(NoWaitLockStateTest, SharedLocksAreCompatible) {
   NoWaitLockState state;
   EXPECT_TRUE(state.IsFree());
-  EXPECT_EQ(state.TryAcquire({1, TXN_TS}, false, false), LockResult::ACQUIRED);
-  EXPECT_EQ(state.TryAcquire({2, TXN_TS}, false, false), LockResult::ACQUIRED);
-  EXPECT_EQ(state.TryAcquire({3, TXN_TS}, true, false), LockResult::ABORT);
+  EXPECT_EQ(state.TryAcquire({1, TXN_TS, false}, false), LockResult::ACQUIRED);
+  EXPECT_EQ(state.TryAcquire({2, TXN_TS, false}, false), LockResult::ACQUIRED);
+  EXPECT_EQ(state.TryAcquire({3, TXN_TS, true}, false), LockResult::ABORT);
   // Can't upgrade while another holder exists
-  EXPECT_EQ(state.TryAcquire({1, TXN_TS}, true, true), LockResult::ABORT);
+  EXPECT_EQ(state.TryAcquire({1, TXN_TS, true}, true), LockResult::ABORT);
   state.Release(false);
-  EXPECT_EQ(state.TryAcquire({1, TXN_TS}, true, true), LockResult::ACQUIRED);
+  EXPECT_EQ(state.TryAcquire({1, TXN_TS, true}, true), LockResult::ACQUIRED);
   state.Release(true);
   EXPECT_TRUE(state.IsFree());
 }
 
 TEST(NoWaitLockStateTest, ExclusiveBlocksEveryoneElse) {
   NoWaitLockState state;
-  EXPECT_EQ(state.TryAcquire({1, TXN_TS}, true, false), LockResult::ACQUIRED);
-  EXPECT_EQ(state.TryAcquire({1, TXN_TS}, true, false), LockResult::ACQUIRED);  // re-entrant
-  EXPECT_EQ(state.TryAcquire({2, TXN_TS}, false, false), LockResult::ABORT);
-  EXPECT_EQ(state.TryAcquire({2, TXN_TS}, true, false), LockResult::ABORT);
+  EXPECT_EQ(state.TryAcquire({1, TXN_TS, true}, false), LockResult::ACQUIRED);
+  EXPECT_EQ(state.TryAcquire({1, TXN_TS, true}, false), LockResult::ACQUIRED);  // re-entrant
+  EXPECT_EQ(state.TryAcquire({2, TXN_TS, false}, false), LockResult::ABORT);
+  EXPECT_EQ(state.TryAcquire({2, TXN_TS, true}, false), LockResult::ABORT);
   state.Release(true);
-  EXPECT_EQ(state.TryAcquire({2, TXN_TS}, false, false), LockResult::ACQUIRED);
+  EXPECT_EQ(state.TryAcquire({2, TXN_TS, false}, false), LockResult::ACQUIRED);
   state.Release(false);
-  EXPECT_EQ(state.TryAcquire({2, TXN_TS}, true, false), LockResult::ACQUIRED);
+  EXPECT_EQ(state.TryAcquire({2, TXN_TS, true}, false), LockResult::ACQUIRED);
 }
 
 TEST(PageLockTableTest, OnlyHeldLocksStay) {

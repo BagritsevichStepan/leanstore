@@ -65,8 +65,13 @@ template <class PageClass>
 void PageGuard<PageClass>::ValidateOrRestart([[maybe_unused]] bool auto_moved) {}
 
 template <class PageClass>
-template <typename LockFn>
-auto PageGuard<PageClass>::LockInPage(LockFn &&lock) -> bool {
+void PageGuard<PageClass>::WaitForInPageLock([[maybe_unused]] wid_t worker_id) {
+  UnreachableCode();
+}
+
+template <class PageClass>
+auto PageGuard<PageClass>::LockInPage(const transaction::LockableTuple *key, std::span<u8> undo_payload,
+                                      bool exclusive) -> bool {
   auto lock_state = buffer_->BufferFramePage(page_id_).lock_state.get();
 
   if (lock_state == nullptr) {
@@ -75,9 +80,29 @@ auto PageGuard<PageClass>::LockInPage(LockFn &&lock) -> bool {
     UnreachableCode();
   }
 
+  auto &txn = TM::active_txn;
+  auto *lock_manager = txn.InPageLockManager();
+
+  const transaction::svcc::inpage::LockParams lock_params{txn.worker_id, txn.start_ts, exclusive};
+
+  transaction::svcc::inpage::LockResult result;
+  {
+    auto guard = lock_state->Lock();
+    ValidateOrRestart(false);
+    result = lock_manager->TryLock(lock_params, undo_payload, key, guard.GetOrCreateLockTable(), page_id_);
+  }
+
+  if (result != transaction::svcc::inpage::LockResult::MUST_WAIT) {
+    return result == transaction::svcc::inpage::LockResult::ACQUIRED;
+  }
+
+  WaitForInPageLock(txn.worker_id);
+
+  /* Fast path: WaitForInPageLock does not throw RestartException, the lock is granted */
   auto guard = lock_state->Lock();
-  ValidateOrRestart(false);
-  return lock(guard.GetOrCreateLockTable());
+  const auto lock_result = lock_manager->TryLock(lock_params, undo_payload, key, guard.GetOrCreateLockTable(), page_id_);
+  Ensure(lock_result == transaction::svcc::inpage::LockResult::ACQUIRED);
+  return true;
 }
 
 template <class PageClass>
@@ -92,10 +117,7 @@ auto PageGuard<PageClass>::TryLockShared(leng_t tree_id, std::span<u8> key) -> b
 
 
     if (transaction::IsSvccInPageLock()) {
-      return LockInPage([&](transaction::svcc::inpage::PageLockTable &table) {
-        const transaction::svcc::inpage::LockParams params{txn.worker_id, txn.start_ts};
-        return txn.InPageLockManager()->TryLockShared(params, lockable, table, page_id_);
-      });
+      return LockInPage(lockable, {}, false);
     }
     
     return txn.LockManager()->TryLockShared(txn.start_ts, lockable);
@@ -112,10 +134,7 @@ auto PageGuard<PageClass>::TryLock(leng_t tree_id, timestamp_t tuple_ts, std::sp
     LOCKABLE_TUPLE_STACK(lockable, key, tree_id);
     
     if (transaction::IsSvccInPageLock()) {
-      return LockInPage([&](transaction::svcc::inpage::PageLockTable &table) {
-        const transaction::svcc::inpage::LockParams params{txn.worker_id, txn.start_ts};
-        return txn.InPageLockManager()->TryLock(params, undo_payload, lockable, table, page_id_);
-      }); 
+      return LockInPage(lockable, undo_payload, true);
     }
 
     return txn.LockManager()->TryLock(txn.start_ts, tuple_ts, undo_payload, lockable);
