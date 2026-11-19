@@ -171,7 +171,7 @@ void BTree::TrySplit(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
       auto right_locks = buffer_->BufferFramePage(new_child.PageID()).lock_state->Lock();
       auto left_table = left_locks.GetLockTableIfExists();
       if (left_table != nullptr && !left_table->IsEmpty()) {
-        left_table->MoveUpperRange({sep_key, sep_info.len}, cmp_lambda_, right_locks.GetOrCreateLockTable());
+        left_table->MoveLocksAboveInto({sep_key, sep_info.len}, cmp_lambda_, right_locks.GetOrCreateLockTable());
       }
     }
     
@@ -878,7 +878,8 @@ void BTree::UpdateTimestamp(std::span<u8> key, timestamp_t commit_ts) {
   }
 }
 
-void BTree::ReleaseInPageLock(std::span<const u8> key, pageid_t leaf_hint, bool exclusive) {
+auto BTree::ReleaseInPageLock(timestamp_t txn_ts, std::span<const u8> key, pageid_t leaf_hint, bool exclusive)
+  -> std::vector<wid_t> {
   // 1. Fast path: the lock is still in the table of the hint leaf. A held lock is in exactly one table,
   // so finding the key there means it is ours. Absent => split/merge/eviction moved it away
   auto hint_lock_state = buffer_->BufferFramePage(leaf_hint).lock_state.get();
@@ -887,8 +888,11 @@ void BTree::ReleaseInPageLock(std::span<const u8> key, pageid_t leaf_hint, bool 
   {
     auto guard = hint_lock_state->Lock();
     auto table = guard.IsInMemory() ? guard.GetLockTableIfExists() : nullptr;
-    if (table != nullptr && table->TryRelease(key, exclusive)) {
-      return;
+    if (table != nullptr) {
+      auto workers_to_wake = table->TryRelease(key, txn_ts, exclusive);
+      if (workers_to_wake.has_value()) {
+        return std::move(workers_to_wake).value();
+      }
     }
   }
 
@@ -915,12 +919,11 @@ void BTree::ReleaseInPageLock(std::span<const u8> key, pageid_t leaf_hint, bool 
         auto guard = lock_state->Lock();
         parent.ValidateOrRestart(true);
         if (guard.IsInMemory()) {
-          guard.GetLockTable().Release(key, exclusive);
-        } else {
-          Ensure(guard.IsEvictedWithLocks());
-          buffer_->EvictedLocks().Release(child, key, exclusive);
+          return guard.GetLockTable().Release(key, txn_ts, exclusive);
         }
-        return;
+
+        Ensure(guard.IsEvictedWithLocks());
+        return buffer_->EvictedLocks().Release(child, key, txn_ts, exclusive);
       }
     } catch (const sync::RestartException &) {}
   }

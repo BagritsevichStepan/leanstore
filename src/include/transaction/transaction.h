@@ -61,6 +61,7 @@ class Transaction {
 
   // Transaction run-time
   State state{State::IDLE};
+  wid_t worker_id;
   timestamp_t start_ts;
   timestamp_t commit_ts;
   IsolationLevel iso_level;

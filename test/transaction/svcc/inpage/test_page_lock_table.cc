@@ -23,46 +23,49 @@ static const ComparisonLambda DESCENDING_CMP = {ComparisonOperator::BLOB_HANDLER
 
 using Key = std::vector<u8>;
 
+/* These tests exercise the No-Wait policy, which ignores the age of a transaction */
+static constexpr timestamp_t TXN_TS = 1;
+
 static auto AcquireShared(PageLockTable &table, const Key &key, wid_t worker_id) -> bool {
-  return table.TryAcquire(key, worker_id, false);
+  return table.TryAcquire(key, {worker_id, TXN_TS}, false) == LockResult::ACQUIRED;
 }
 
 static auto AcquireExclusive(PageLockTable &table, const Key &key, wid_t worker_id, bool holds_shared) -> bool {
-  return table.TryAcquire(key, worker_id, true, holds_shared);
+  return table.TryAcquire(key, {worker_id, TXN_TS}, true, holds_shared) == LockResult::ACQUIRED;
 }
 
 static void ReleaseShared(PageLockTable &table, const Key &key) {
-  table.Release(key, false);
+  table.Release(key, TXN_TS, false);
 }
 
 static void ReleaseExclusive(PageLockTable &table, const Key &key) {
-  table.Release(key, true);
+  table.Release(key, TXN_TS, true);
 }
 
-TEST(LockStateTest, SharedLocksAreCompatible) {
-  LockState state;
+TEST(NoWaitLockStateTest, SharedLocksAreCompatible) {
+  NoWaitLockState state;
   EXPECT_TRUE(state.IsFree());
-  EXPECT_TRUE(state.TryAcquire(1, false));
-  EXPECT_TRUE(state.TryAcquire(2, false));
-  EXPECT_FALSE(state.TryAcquire(3, true, false));
+  EXPECT_EQ(state.TryAcquire({1, TXN_TS}, false, false), LockResult::ACQUIRED);
+  EXPECT_EQ(state.TryAcquire({2, TXN_TS}, false, false), LockResult::ACQUIRED);
+  EXPECT_EQ(state.TryAcquire({3, TXN_TS}, true, false), LockResult::ABORT);
   // Can't upgrade while another holder exists
-  EXPECT_FALSE(state.TryAcquire(1, true, true));
+  EXPECT_EQ(state.TryAcquire({1, TXN_TS}, true, true), LockResult::ABORT);
   state.Release(false);
-  EXPECT_TRUE(state.TryAcquire(1, true, true));
+  EXPECT_EQ(state.TryAcquire({1, TXN_TS}, true, true), LockResult::ACQUIRED);
   state.Release(true);
   EXPECT_TRUE(state.IsFree());
 }
 
-TEST(LockStateTest, ExclusiveBlocksEveryoneElse) {
-  LockState state;
-  EXPECT_TRUE(state.TryAcquire(1, true, false));
-  EXPECT_TRUE(state.TryAcquire(1, true, false));  // re-entrant
-  EXPECT_FALSE(state.TryAcquire(2, false));
-  EXPECT_FALSE(state.TryAcquire(2, true, false));
+TEST(NoWaitLockStateTest, ExclusiveBlocksEveryoneElse) {
+  NoWaitLockState state;
+  EXPECT_EQ(state.TryAcquire({1, TXN_TS}, true, false), LockResult::ACQUIRED);
+  EXPECT_EQ(state.TryAcquire({1, TXN_TS}, true, false), LockResult::ACQUIRED);  // re-entrant
+  EXPECT_EQ(state.TryAcquire({2, TXN_TS}, false, false), LockResult::ABORT);
+  EXPECT_EQ(state.TryAcquire({2, TXN_TS}, true, false), LockResult::ABORT);
   state.Release(true);
-  EXPECT_TRUE(state.TryAcquire(2, false));
+  EXPECT_EQ(state.TryAcquire({2, TXN_TS}, false, false), LockResult::ACQUIRED);
   state.Release(false);
-  EXPECT_TRUE(state.TryAcquire(2, true, false));
+  EXPECT_EQ(state.TryAcquire({2, TXN_TS}, true, false), LockResult::ACQUIRED);
 }
 
 TEST(PageLockTableTest, OnlyHeldLocksStay) {
@@ -105,7 +108,7 @@ TEST(PageLockTableTest, SplitMovesUpperKeys) {
   }
   ASSERT_TRUE(AcquireExclusive(left, keys[4], 1, true));
 
-  left.MoveUpperRange(Key{3}, CMP, right);
+  left.MoveLocksAboveInto(Key{3}, CMP, right);
 
   // keys > separator moved with their state: they are held in `right` now
   EXPECT_FALSE(AcquireShared(right, keys[4], 2));
@@ -253,7 +256,7 @@ TEST(PageLockTableTest, SplitMovesOnlyHeldLocks) {
   ASSERT_TRUE(AcquireShared(left, high, 1));
   ReleaseShared(left, high);
 
-  left.MoveUpperRange(Key{5}, CMP, right);
+  left.MoveLocksAboveInto(Key{5}, CMP, right);
 
   // The lock of `high` was released before the split: nothing is handed over
   EXPECT_TRUE(right.IsEmpty());
@@ -320,7 +323,7 @@ TEST(PageLockTableTest, SplitWithDescendingOrder) {
   }
 
   // DESCENDING_CMP, not the byte order: {0xFF} < {0xC0} < {0x80} = separator < {0x80, 0x00} < {0x40} < {0x00}
-  left.MoveUpperRange(Key{0x80}, DESCENDING_CMP, right);
+  left.MoveLocksAboveInto(Key{0x80}, DESCENDING_CMP, right);
 
   for (auto &key : staying) {
     EXPECT_FALSE(right.TryRelease(key, false));
@@ -401,7 +404,7 @@ TEST(PageLockTableTest, SplitOrdersLongKeysAsMemcmp) {
     ASSERT_TRUE(AcquireExclusive(left, key, 1, false));
   }
 
-  left.MoveUpperRange(separator, CMP, right);
+  left.MoveLocksAboveInto(separator, CMP, right);
 
   for (auto &key : staying) {
     EXPECT_FALSE(right.TryRelease(key, false));

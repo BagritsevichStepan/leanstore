@@ -26,6 +26,7 @@ void Transaction::Initialize(TransactionManager *manager, timestamp_t start_time
 
   //--------------------------
   state     = State::STARTED;
+  worker_id = LeanStore::worker_thread_id;
   start_ts  = start_timestamp;
   commit_ts = INVALID_TS;
   iso_level = level;

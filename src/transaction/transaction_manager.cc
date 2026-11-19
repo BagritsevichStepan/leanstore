@@ -25,9 +25,10 @@ namespace leanstore::transaction {
 namespace {
 
 /* SVCC in-page locking: the lock lives in the leaf covering the key (or in the EvictedLockStore) */
-void ReleaseInPageLock(const LockableTuple *tuple, pageid_t leaf_hint, bool exclusive) {
+auto ReleaseInPageLock(timestamp_t txn_ts, const LockableTuple *tuple, pageid_t leaf_hint, bool exclusive)
+  -> std::vector<wid_t> {
   auto index = reinterpret_cast<storage::BTree *>(catalog[tuple->tree_id]);
-  index->ReleaseInPageLock({tuple->key, tuple->key_len}, leaf_hint, exclusive);
+  return index->ReleaseInPageLock(txn_ts, {tuple->key, tuple->key_len}, leaf_hint, exclusive);
 }
 
 /* Undo a write: re-install the previous payload, or remove the key if it did not exist */
@@ -111,7 +112,8 @@ void TransactionManager::CommitTransaction() {
   txn.commit_ts = global_clock++;
   if (txn.iso_level > IsolationLevel::READ_UNCOMMITTED) {
     if (inpage_lock_manager_ != nullptr) {
-      inpage_lock_manager_->ReleaseAllLocks([](const LockableTuple *, std::span<const u8>) {}, ReleaseInPageLock);
+      inpage_lock_manager_->ReleaseAllLocks(txn.start_ts, [](const LockableTuple *, std::span<const u8>) {},
+                                            ReleaseInPageLock);
     } else {
       lock_manager_->ReleaseAllLocks(txn.start_ts, [&](const LockableTuple *tuple, timestamp_t, std::span<const u8>) {
         // This lambda -- Updating tuple's TS -- will only be triggered by MVCC impl
@@ -193,7 +195,7 @@ void TransactionManager::AbortTransaction() {
   txn.commit_ts = global_clock++;
   if (txn.iso_level > IsolationLevel::READ_UNCOMMITTED) {
     if (inpage_lock_manager_ != nullptr) {
-      inpage_lock_manager_->ReleaseAllLocks(UndoWrite, ReleaseInPageLock);
+      inpage_lock_manager_->ReleaseAllLocks(txn.start_ts, UndoWrite, ReleaseInPageLock);
     } else {
       lock_manager_->ReleaseAllLocks(
         txn.start_ts, [](const LockableTuple *tuple, timestamp_t undo_ts, std::span<const u8> payload) {

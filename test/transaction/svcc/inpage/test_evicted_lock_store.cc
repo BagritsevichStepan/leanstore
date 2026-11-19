@@ -25,6 +25,30 @@ class TestEvictedLockStore : public BaseTest {
   using Locks = std::map<std::vector<u8>, u32>;
 
   static constexpr u32 OWNER_SHIFT = 16;
+  /* These tests exercise the No-Wait policy, whose state is the word and which ignores the age */
+  static constexpr timestamp_t TXN_TS = 1;
+
+  /* Builds the state of a lock through the public API, from the word the test describes it with */
+  static auto MakeState(u32 word) -> NoWaitLockState {
+    NoWaitLockState state;
+
+    const auto owner = static_cast<u16>(word >> OWNER_SHIFT);
+    if (owner != 0) {
+      state.TryAcquire({static_cast<wid_t>(owner - 1), TXN_TS}, true, false);
+      return state;
+    }
+
+    for (u32 holder = 0; holder < word; holder++) {
+      state.TryAcquire({static_cast<wid_t>(holder), TXN_TS}, false, false);
+    }
+    return state;
+  }
+
+  static auto WordOf(std::span<const u8> state) -> u32 {
+    u32 word;
+    std::memcpy(&word, state.data(), sizeof(word));
+    return word;
+  }
 
   void SetUp() override {
     BaseTest::SetupTestFile();
@@ -65,7 +89,8 @@ class TestEvictedLockStore : public BaseTest {
   void Spill(pageid_t pid, const Locks &locks) {
     PageLockTable table;
     for (const auto &[key, word] : locks) {
-      table.AddLock(key, LockState{word});
+      const auto state = MakeState(word);
+      table.AddLock(key, {reinterpret_cast<const u8 *>(&state), sizeof(state)});
     }
     Store().Spill(pid, table);
   }
@@ -75,8 +100,8 @@ class TestEvictedLockStore : public BaseTest {
     Store().Restore(pid, table);
 
     Locks locks;
-    table.ForEachHeldLock([&](std::span<const u8> key, const LockState &lock) {
-      locks.emplace(std::vector<u8>(key.begin(), key.end()), lock.word);
+    table.ForEachHeldLock([&](std::span<const u8> key, std::span<const u8> state) {
+      locks.emplace(std::vector<u8>(key.begin(), key.end()), WordOf(state));
     });
     return locks;
   }
@@ -85,7 +110,7 @@ class TestEvictedLockStore : public BaseTest {
   void Release(pageid_t pid, Locks &locks, const std::vector<u8> &key) {
     auto &word = locks.at(key);
     const bool exclusive = (word >> OWNER_SHIFT) != 0;
-    Store().Release(pid, key, exclusive);
+    Store().Release(pid, key, TXN_TS, exclusive);
 
     if (exclusive) {
       locks.erase(key);

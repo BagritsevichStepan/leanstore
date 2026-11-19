@@ -20,8 +20,9 @@ class EvictedLockStore {
   // Restore of page
   void Restore(pageid_t pid, PageLockTable &table);
 
-  /* Releases the lock of (pid, key) of the evicted page pid, which must be in the store; erases it once free */
-  void Release(pageid_t pid, std::span<const u8> key, bool exclusive);
+  /* Releases the lock of (pid, key) of the evicted page pid, which must be in the store; erases it once free.
+   * Returns the waiters to wake up */
+  auto Release(pageid_t pid, std::span<const u8> key, timestamp_t txn_ts, bool exclusive) -> std::vector<wid_t>;
 
  private:
   storage::BTree tree_;

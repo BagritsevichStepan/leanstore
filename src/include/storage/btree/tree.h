@@ -51,8 +51,10 @@ class BTree : public KVInterface {
   auto GetTimestamp(std::span<u8> key) -> timestamp_t;
   void UpdateTimestamp(std::span<u8> key, timestamp_t commit_ts);
 
-  /* SVCC in-page locking: release a lock the running transaction holds on key */
-  void ReleaseInPageLock(std::span<const u8> key, pageid_t leaf_hint, bool exclusive);
+  /* SVCC in-page locking: release a lock the running transaction holds on key.
+     Releases the lock of key, held by txn_ts, and returns the waiters to wake up */
+  auto ReleaseInPageLock(timestamp_t txn_ts, std::span<const u8> key, pageid_t leaf_hint, bool exclusive)
+    -> std::vector<wid_t>;
 
  private:
   /* Iterate all pages utilities */

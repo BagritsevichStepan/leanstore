@@ -90,9 +90,11 @@ auto PageGuard<PageClass>::TryLockShared(leng_t tree_id, std::span<u8> key) -> b
       return true;
     }
 
+
     if (transaction::IsSvccInPageLock()) {
       return LockInPage([&](transaction::svcc::inpage::PageLockTable &table) {
-        return txn.InPageLockManager()->TryLockShared(lockable, table, page_id_);
+        const transaction::svcc::inpage::LockParams params{txn.worker_id, txn.start_ts};
+        return txn.InPageLockManager()->TryLockShared(params, lockable, table, page_id_);
       });
     }
     
@@ -111,7 +113,8 @@ auto PageGuard<PageClass>::TryLock(leng_t tree_id, timestamp_t tuple_ts, std::sp
     
     if (transaction::IsSvccInPageLock()) {
       return LockInPage([&](transaction::svcc::inpage::PageLockTable &table) {
-        return txn.InPageLockManager()->TryLock(undo_payload, lockable, table, page_id_);
+        const transaction::svcc::inpage::LockParams params{txn.worker_id, txn.start_ts};
+        return txn.InPageLockManager()->TryLock(params, undo_payload, lockable, table, page_id_);
       }); 
     }
 
