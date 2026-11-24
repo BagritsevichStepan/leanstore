@@ -80,7 +80,7 @@ class BTree : public KVInterface {
   void EnsureSpaceForSplit(BTreeNode *to_split, std::span<u8> key);
   void TryMerge(sync::ExclusiveGuard<BTreeNode> &&parent, sync::ExclusiveGuard<BTreeNode> &&left,
                 sync::ExclusiveGuard<BTreeNode> &&right, leng_t left_pos);
-  void EnsureUnderfullInnersForMerge(BTreeNode *to_merge);
+  void EnsureUnderfullInnersForMerge(BTreeNode *to_merge, std::span<u8> rep_key);
 
   /* Insert/Update utilities */
   auto InsertIntoLeaf(sync::OptimisticGuard<BTreeNode> &parent, sync::OptimisticGuard<BTreeNode> &node,

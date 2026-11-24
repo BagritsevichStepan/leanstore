@@ -260,17 +260,22 @@ void BTree::TryMerge(ExclusiveGuard<BTreeNode> &&parent, ExclusiveGuard<BTreeNod
       GenerateWALNewPage(right);
     }
     if (parent->FreeSpaceAfterCompaction() >= BTreeNodeHeader::SIZE_UNDER_FULL) {
+      auto upper_fence = parent->GetUpperFence();
+      Ensure(upper_fence.size() <= BTreeNode::MAX_RECORD_SIZE);
+      u8 rep_key[BTreeNode::MAX_RECORD_SIZE];
+      std::memcpy(rep_key, upper_fence.data(), upper_fence.size());
+
       left.Unlock();
       right.Unlock();
       // Parent node is underfull, try merge this inner node
-      EnsureUnderfullInnersForMerge(parent.UnlockAndGetPtr());
+      EnsureUnderfullInnersForMerge(parent.UnlockAndGetPtr(), {rep_key, upper_fence.size()});
     }
   }
 }
 
-void BTree::EnsureUnderfullInnersForMerge(BTreeNode *to_merge) {
+void BTree::EnsureUnderfullInnersForMerge(BTreeNode *to_merge, std::span<u8> rep_key) {
   assert(to_merge->IsInner());
-  auto rep_key = to_merge->GetUpperFence();
+
   while (true) {
     try {
       // TODO(XXX): Implement tree-level compression
