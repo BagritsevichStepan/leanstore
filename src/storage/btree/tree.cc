@@ -320,10 +320,17 @@ auto BTree::InsertIntoLeaf(OptimisticGuard<BTreeNode> &parent, OptimisticGuard<B
   /* Check if current key exists or not */
   bool found;
   auto pos = node->LowerBound(key, found, cmp_lambda_);
-  if (found) { return OpResult::DUPLICATE; }
+  if (found) {
+    if (IsSvccInPageLock() && !node.TryLockShared(metadata_slotid_, key)) {
+      return OpResult::ABORT_TX;
+    }
+    return OpResult::DUPLICATE;
+  }
 
   /* Concurrency control */
-  if (IsSvccLockTable() && !node.TryLock(metadata_slotid_, 0UL, {}, key)) { return OpResult::ABORT_TX; }
+  if ((IsSvccLockTable() || IsSvccInPageLock()) && !node.TryLock(metadata_slotid_, 0UL, {}, key)) {
+    return OpResult::ABORT_TX;
+  }
 
   /* Leaf node has enough space -> only latch leaf node */
   auto defer_log = DeferLog<BTreeNode>(); /* Alternative WAL cycle - automatically append log when the scope ends */
@@ -331,8 +338,7 @@ auto BTree::InsertIntoLeaf(OptimisticGuard<BTreeNode> &parent, OptimisticGuard<B
     ExclusiveGuard<BTreeNode> node_locked(std::move(node));
     parent.ValidateOrRestart();
 
-    /* SVCC in-page: lock before inserting, a reader may hold a lock on this key while it is still absent */
-    if ((IsMvcc() || IsSvccInPageLock()) && !node_locked.TryLock(metadata_slotid_, 0UL, {}, key)) { return OpResult::ABORT_TX; }
+    if (IsMvcc() && !node_locked.TryLock(metadata_slotid_, 0UL, {}, key)) { return OpResult::ABORT_TX; }
 
     pos = node_locked->InsertKeyValue(key, payload, cmp_lambda_);
     if (IsMvcc()) { node_locked->UpdateTimestamp(pos, transaction::Transaction::TUPLE_UNDO_TIMESTAMP); }
@@ -352,13 +358,16 @@ auto BTree::UpdateLeafEntry(OptimisticGuard<BTreeNode> &parent, OptimisticGuard<
   // SVCC
   auto tuple_ts = node->GetTimestamp(slot_id);
   node.ValidateOrRestart(false);
-  if (IsSvccLockTable() && !node.TryLock(metadata_slotid_, tuple_ts, curr_payload, key)) { return OpResult::ABORT_TX; }
+  if ((IsSvccLockTable() || IsSvccInPageLock()) &&
+      !node.TryLock(metadata_slotid_, tuple_ts, curr_payload, key)) {
+    return OpResult::ABORT_TX;
+  }
   // only lock leaf
   ExclusiveGuard<BTreeNode> node_locked(std::move(node));
   parent.ValidateOrRestart();
-  // MVCC or SVCC with in-page lock
-  if ((IsMvcc() || IsSvccInPageLock()) && !node_locked.TryLock(metadata_slotid_, node_locked->GetTimestamp(slot_id),
-                                                 node_locked->GetPayload(slot_id), key)) {
+  // MVCC
+  if (IsMvcc() && !node_locked.TryLock(metadata_slotid_, node_locked->GetTimestamp(slot_id),
+                                       node_locked->GetPayload(slot_id), key)) {
     return OpResult::ABORT_TX;
   }
   // Log previous payload, trigger func utility if provided, and remove the entry
@@ -421,6 +430,7 @@ auto BTree::LookUp(std::span<u8> key, const AccessPayloadFunc &read_cb) -> OpRes
 
       // Happy path
       auto payload = node->GetPayload(pos);
+      node.ValidateOrRestart(false);
       if (IsMvcc() && payload.empty()) { return OpResult::NOT_FOUND; }
       read_cb(payload);
       return OpResult::OK;
@@ -464,6 +474,7 @@ auto BTree::Upsert(std::span<u8> key, std::span<const u8> payload) -> OpResult {
       if (!found) {
         // Try to insert the key-value
         auto op_ret = InsertIntoLeaf(parent, node, key, payload);
+        if (op_ret == OpResult::DUPLICATE) { continue; }
         if (op_ret != OpResult::NEED_SPLIT) { return op_ret; }
       } else {
         auto op_ret = UpdateLeafEntry(parent, node, slot_id, key, payload, {});
@@ -497,13 +508,21 @@ auto BTree::Remove(std::span<u8> key) -> OpResult {
       bool found;
       auto slot_id = node->LowerBound(key, found, cmp_lambda_);
       // TODO(XXX): Should we return OpResult::ABORT_TX here if an uncommited txn deleted the key?
-      if (!found) { return OpResult::NOT_FOUND; }
+      if (!found) {
+        if (IsSvccInPageLock() && !node.TryLockShared(metadata_slotid_, key)) {
+          return OpResult::ABORT_TX;
+        }
+        return OpResult::NOT_FOUND;
+      }
 
       // Concurrency control
       auto tuple_ts = node->GetTimestamp(slot_id);
       auto payload  = node->GetPayload(slot_id);
       node.ValidateOrRestart(false);
-      if (IsSvccLockTable() && !node.TryLock(metadata_slotid_, tuple_ts, payload, key)) { return OpResult::ABORT_TX; }
+      if ((IsSvccLockTable() || IsSvccInPageLock()) &&
+          !node.TryLock(metadata_slotid_, tuple_ts, payload, key)) {
+        return OpResult::ABORT_TX;
+      }
 
       // Removal
       leng_t entry_size = node->slots[slot_id].key_length + payload.size();
@@ -519,8 +538,8 @@ auto BTree::Remove(std::span<u8> key) -> OpResult {
         ExclusiveGuard<BTreeNode> right_locked(buffer_, parent_locked->GetChild(node_pos + 1));
 
         // Update by remove then insert
-        if ((IsMvcc() || IsSvccInPageLock()) && !node_locked.TryLock(metadata_slotid_, node_locked->GetTimestamp(slot_id),
-                                                       node_locked->GetPayload(slot_id), key)) {
+        if (IsMvcc() && !node_locked.TryLock(metadata_slotid_, node_locked->GetTimestamp(slot_id),
+                                             node_locked->GetPayload(slot_id), key)) {
           return OpResult::ABORT_TX;
         }
         node_locked->RemoveSlot(slot_id, IsMvcc());
@@ -541,8 +560,8 @@ auto BTree::Remove(std::span<u8> key) -> OpResult {
         ExclusiveGuard<BTreeNode> node_locked(std::move(node));
         parent.ValidateOrRestart();
         // Update by remove then insert
-        if ((IsMvcc() || IsSvccInPageLock()) && !node_locked.TryLock(metadata_slotid_, node_locked->GetTimestamp(slot_id),
-                                                       node_locked->GetPayload(slot_id), key)) {
+        if (IsMvcc() && !node_locked.TryLock(metadata_slotid_, node_locked->GetTimestamp(slot_id),
+                                             node_locked->GetPayload(slot_id), key)) {
           return OpResult::ABORT_TX;
         }
         node_locked->RemoveSlot(slot_id, IsMvcc());
@@ -577,7 +596,12 @@ auto BTree::Update(std::span<u8> key, std::span<const u8> payload, const AccessP
       // Lookup key
       bool found;
       auto slot_id = node->LowerBound(key, found, cmp_lambda_);
-      if (!found) { return OpResult::NOT_FOUND; }
+      if (!found) {
+        if (IsSvccInPageLock() && !node.TryLockShared(metadata_slotid_, key)) {
+          return OpResult::ABORT_TX;
+        }
+        return OpResult::NOT_FOUND;
+      }
 
       // Try update
       auto op_ret = UpdateLeafEntry(parent, node, slot_id, key, payload, func);
@@ -599,12 +623,18 @@ auto BTree::UpdateInPlace(std::span<u8> key, const ModifyPayloadFunc &func, Fixe
       auto node = FindLeafOptimistic(key);
       bool found;
       auto pos = node->LowerBound(key, found, cmp_lambda_);
-      if (!found) { return OpResult::NOT_FOUND; }
+      if (!found) {
+        if (IsSvccInPageLock() && !node.TryLockShared(metadata_slotid_, key)) {
+          return OpResult::ABORT_TX;
+        }
+        return OpResult::NOT_FOUND;
+      }
 
       /* Concurrency control */
       auto tuple_ts = node->GetTimestamp(pos);
+      auto curr_payload  = node->GetPayload(pos);
       node.ValidateOrRestart(false);
-      if (IsSvccLockTable() && !node.TryLock(metadata_slotid_, tuple_ts, node->GetPayload(pos), key)) {
+      if ((IsSvccLockTable() || IsSvccInPageLock()) && !node.TryLock(metadata_slotid_, tuple_ts, curr_payload, key)) {
         return OpResult::ABORT_TX;
       }
 
@@ -613,7 +643,7 @@ auto BTree::UpdateInPlace(std::span<u8> key, const ModifyPayloadFunc &func, Fixe
       {
         ExclusiveGuard<BTreeNode> node_locked(std::move(node));
         auto payload = node_locked->GetPayload(pos);
-        if ((IsMvcc() || IsSvccInPageLock()) && !node_locked.TryLock(metadata_slotid_, node_locked->GetTimestamp(pos), payload, key)) {
+        if (IsMvcc() && !node_locked.TryLock(metadata_slotid_, node_locked->GetTimestamp(pos), payload, key)) {
           return OpResult::ABORT_TX;
         }
 
@@ -638,6 +668,53 @@ auto BTree::UpdateInPlace(std::span<u8> key, const ModifyPayloadFunc &func, Fixe
   }
 }
 
+auto BTree::AccessRecord(OptimisticGuard<BTreeNode> &node, u64 pos, const AccessRecordFunc &fn) -> OpResult {
+  const auto prefix_len = node->header.prefix_len;
+  const auto key_length = node->slots[pos].key_length;
+  const u32 full_key_length = prefix_len + key_length;
+  node.ValidateOrRestart(false);
+
+  u8 key[full_key_length];
+  std::memcpy(key, node->GetPrefix(), prefix_len);
+  std::memcpy(key + prefix_len, node->GetKey(pos), key_length);
+  node.ValidateOrRestart(false);
+
+  auto key_span = std::span<u8>{key, full_key_length};
+  // Concurrency Control
+  if (!system_ && !node.TryLockShared(metadata_slotid_, key_span)) { return OpResult::ABORT_TX; }
+
+  // Actual scan read
+  auto payload = node->GetPayload(pos);
+  node.ValidateOrRestart(false);
+
+  auto &txn    = transaction::Transaction::active_txn;
+
+  if (IsMvcc() && txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
+    LOCKABLE_TUPLE_STACK(lockable, key_span, metadata_slotid_);
+    auto latest_tuple_ts = node->GetTimestamp(pos);
+    if (txn.start_ts < latest_tuple_ts) {
+      auto read_success = txn.LookupVersionChain(
+        lockable,
+        [&](std::span<const u8> tuple_data) {
+          payload = std::span<u8>(const_cast<u8 *>(tuple_data.data()), tuple_data.size());
+        },
+        latest_tuple_ts);
+      txn.UpdateTupleReadTS(lockable, latest_tuple_ts);
+      // TODO(XXX): What should we do if this tuple version is a deleted one?
+      if (read_success) {
+        auto ret = fn(key_span, payload);
+        return (ret) ? OpResult::OK : OpResult::STOP_SCAN;
+      }
+
+      return OpResult::OK;
+    }
+    txn.UpdateTupleReadTS(lockable, latest_tuple_ts);
+  }
+
+  auto ret = fn(key_span, payload);
+  return (ret) ? OpResult::OK : OpResult::STOP_SCAN;
+}
+
 auto BTree::ScanAscending(std::span<u8> key, const AccessRecordFunc &fn) -> OpResult {
   while (true) {
     try {
@@ -659,8 +736,15 @@ auto BTree::ScanAscending(std::span<u8> key, const AccessRecordFunc &fn) -> OpRe
 
           // The smallest key greater than the upper fence (inclusive) is in the next leaf
           auto upper_fence = node->GetUpperFence();
+        
+          if (upper_fence.size() > BTreeNode::MAX_RECORD_SIZE) {
+            node.ValidateOrRestart(false);
+            UnreachableCode();
+          }
+
           std::vector<u8> next_key(upper_fence.begin(), upper_fence.end());
           next_key.push_back(0);
+          node.ValidateOrRestart(false);
 
           node = FindLeafOptimistic(next_key);
           pos = node->LowerBound(next_key, unused, cmp_lambda_);
@@ -670,8 +754,10 @@ auto BTree::ScanAscending(std::span<u8> key, const AccessRecordFunc &fn) -> OpRe
   }
 }
 
-auto BTree::ExtractAscending(std::span<u8> key, const KeyPredicateFunc &matches, const AccessRecordFunc &consume)
+auto BTree::ExtractAscending(std::span<u8> key, const KeyPredicateFunc &matches, const ConsumeRecordFunc &consume)
   -> OpResult {
+  Ensure(system_);
+
   std::vector<u8> from(key.begin(), key.end());
 
   u8 record_key[BTreeNode::MAX_RECORD_SIZE];
@@ -717,53 +803,50 @@ auto BTree::ExtractAscending(std::span<u8> key, const KeyPredicateFunc &matches,
       }
 
       const bool is_range_end_in_current_leaf = final_pos < node->header.count;
-      if (first_pos == final_pos && is_range_end_in_current_leaf) {
-        node.ValidateOrRestart(false);
-        return OpResult::OK;
-      }
+      const bool is_last_leaf = node->header.upper_fence.len == 0;
 
-      auto remove_matching_cb = [&](ExclusiveGuard<BTreeNode> &leaf) -> OpResult {
-        leng_t pos = first_pos;
-
-        for (leng_t removed = 0; removed < final_pos - first_pos; removed++) {
-          const u32 key_len = leaf->header.prefix_len + leaf->slots[pos].key_length;
-          std::memcpy(record_key, leaf->GetPrefix(), leaf->header.prefix_len);
-          std::memcpy(record_key + leaf->header.prefix_len, leaf->GetKey(pos), leaf->slots[pos].key_length);
-          auto key_span = std::span<u8>{record_key, key_len};
-
-          if (!system_ && !leaf.TryLock(metadata_slotid_, leaf->GetTimestamp(pos), leaf->GetPayload(pos), key_span)) {
-            return OpResult::ABORT_TX;
-          }
-
-          consume(key_span, leaf->GetPayload(pos));
-          leaf->RemoveSlot(pos, IsMvcc());
-
-          if (IsWalEnabled()) {
-            auto &entry = leaf.PrepareWalEntry<WALRemove>(0);
-            entry.slot_id = pos;
-            leaf.SubmitActiveWalEntry();
-          }
-
-          if (IsMvcc()) {
-            leaf->UpdateTimestamp(pos, transaction::Transaction::TUPLE_UNDO_TIMESTAMP);
-            pos++;
-          }
+      // No match in this leaf
+      if (first_pos == final_pos) {
+        if (is_range_end_in_current_leaf || is_last_leaf) {
+          return OpResult::OK;
         }
 
-        if (!is_range_end_in_current_leaf && leaf->header.upper_fence.len > 0) {
+        auto upper_fence = node->GetUpperFence();
+        
+        if (upper_fence.size() > BTreeNode::MAX_RECORD_SIZE) {
+          node.ValidateOrRestart(false);
+          UnreachableCode();
+        }
+
+        std::vector<u8> next_from(upper_fence.begin(), upper_fence.end());
+        next_from.push_back(0);
+        node.ValidateOrRestart(false);
+
+        from = std::move(next_from);
+        continue;
+      }
+
+      auto remove_matching_cb = [&](ExclusiveGuard<BTreeNode> &leaf) {
+        for (leng_t removed = 0; removed < final_pos - first_pos; removed++) {
+          const leng_t prefix_len = leaf->header.prefix_len;
+          const leng_t slot_key_len = leaf->slots[first_pos].key_length;
+
+          std::memcpy(record_key, leaf->GetPrefix(), prefix_len);
+          std::memcpy(record_key + prefix_len, leaf->GetKey(first_pos), slot_key_len);
+
+          const u32 key_len = prefix_len + slot_key_len;
+          consume({record_key, key_len}, leaf->GetPayload(first_pos));
+          leaf->RemoveSlot(first_pos, false);
+        }
+
+        if (!is_range_end_in_current_leaf && !is_last_leaf) {
           auto upper_fence = leaf->GetUpperFence();
           from.assign(upper_fence.begin(), upper_fence.end());
           from.push_back(0);
         }
-
-        return OpResult::OK;
       };
 
-      const bool is_last_leaf = node->header.upper_fence.len == 0;
-      OpResult operation_result;
-
-      if ((first_pos < final_pos) &&
-          (node->FreeSpaceAfterCompaction() + bytes_to_remove >= BTreeNodeHeader::SIZE_UNDER_FULL) &&
+      if ((node->FreeSpaceAfterCompaction() + bytes_to_remove >= BTreeNodeHeader::SIZE_UNDER_FULL) &&
           (parent.PageID() != metadata_pid_) &&
           (parent->header.count >= 2) &&
           ((node_pos + 1) < parent->header.count)
@@ -773,21 +856,20 @@ auto BTree::ExtractAscending(std::span<u8> key, const KeyPredicateFunc &matches,
         ExclusiveGuard<BTreeNode> node_locked(std::move(node));
         ExclusiveGuard<BTreeNode> right_locked(buffer_, parent_locked->GetChild(node_pos + 1));
 
-        operation_result = remove_matching_cb(node_locked);
+        remove_matching_cb(node_locked);
 
-        if (operation_result == OpResult::OK &&
-            right_locked->FreeSpaceAfterCompaction() >= (PAGE_SIZE - BTreeNodeHeader::SIZE_UNDER_FULL)) {
+        if (right_locked->FreeSpaceAfterCompaction() >= (PAGE_SIZE - BTreeNodeHeader::SIZE_UNDER_FULL)) {
           TryMerge(std::move(parent_locked), std::move(node_locked), std::move(right_locked), node_pos);
         }
       } else {
         ExclusiveGuard<BTreeNode> node_locked(std::move(node));
         parent.ValidateOrRestart();
 
-        operation_result = remove_matching_cb(node_locked);
+        remove_matching_cb(node_locked);
       }
 
-      if (operation_result != OpResult::OK || is_range_end_in_current_leaf || is_last_leaf) {
-        return operation_result;
+      if (is_range_end_in_current_leaf || is_last_leaf) {
+        return OpResult::OK;
       }
     } catch (const sync::RestartException &) {}
   }
@@ -813,7 +895,18 @@ auto BTree::ScanDescending(std::span<u8> key, const AccessRecordFunc &fn) -> OpR
           pos--;
         }
         if (node->header.IsLowerFenceInfinity()) { return OpResult::OK; }
-        node = FindLeafOptimistic(node->GetLowerFence());
+
+        auto lower_fence = node->GetLowerFence();
+
+        if (lower_fence.size() > BTreeNode::MAX_RECORD_SIZE) {
+          node.ValidateOrRestart(false);
+          UnreachableCode();
+        }
+
+        std::vector<u8> prev_key(lower_fence.begin(), lower_fence.end());
+        node.ValidateOrRestart(false);
+
+        node = FindLeafOptimistic(prev_key);
         pos  = node->header.count - 1;
       }
     } catch (const sync::RestartException &) {}

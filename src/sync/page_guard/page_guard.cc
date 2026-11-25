@@ -115,7 +115,6 @@ auto PageGuard<PageClass>::TryLockShared(leng_t tree_id, std::span<u8> key) -> b
       return true;
     }
 
-
     if (transaction::IsSvccInPageLock()) {
       return LockInPage(lockable, {}, false);
     }

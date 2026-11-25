@@ -76,9 +76,8 @@ void EvictedLockStore::Restore(pageid_t pid, PageLockTable &table) {
     [&](std::span<const u8> stored_key) {
       return IsKeyOfPage(stored_key, pid);
     },
-    [&](std::span<u8> stored_key, std::span<u8> payload) {
+    [&](std::span<const u8> stored_key, std::span<const u8> payload) {
       table.AddLock(stored_key.subspan(PID_BYTES), payload);
-      return true;
     });
 
   Ensure(extraction_result == OpResult::OK);

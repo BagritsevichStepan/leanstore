@@ -2,7 +2,7 @@
 #include "common/typedefs.h"
 #include "test/base_test.h"
 #include "transaction/svcc/inpage/evicted_lock_store.h"
-#include "transaction/svcc/inpage/lock_state.h"
+#include "transaction/svcc/inpage/no_wait_lock_state.h"
 #include "transaction/svcc/inpage/page_lock_table.h"
 
 #include "gtest/gtest.h"

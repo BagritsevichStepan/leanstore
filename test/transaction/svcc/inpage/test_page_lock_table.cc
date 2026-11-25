@@ -160,15 +160,15 @@ TEST(PageLockTableTest, ReleasedKeyCanBeLockedAgain) {
 TEST(PageLockTableTest, TryReleaseOfLockNotHeld) {
   PageLockTable table;
   Key k = {1, 2};
-  EXPECT_FALSE(table.TryRelease(k, false));
-  EXPECT_FALSE(table.TryRelease(k, true));
+  EXPECT_FALSE(table.TryRelease(k, TXN_TS, false));
+  EXPECT_FALSE(table.TryRelease(k, TXN_TS, true));
 
   ASSERT_TRUE(AcquireShared(table, k, 1));
 
   // A prefix or an extension of a key is another key
-  EXPECT_FALSE(table.TryRelease(Key{1}, false));
-  EXPECT_FALSE(table.TryRelease(Key{1, 2, 0}, false));
-  EXPECT_TRUE(table.TryRelease(k, false));
+  EXPECT_FALSE(table.TryRelease(Key{1}, TXN_TS, false));
+  EXPECT_FALSE(table.TryRelease(Key{1, 2, 0}, TXN_TS, false));
+  EXPECT_TRUE(table.TryRelease(k, TXN_TS, false));
   EXPECT_TRUE(table.IsEmpty());
 }
 
@@ -260,8 +260,8 @@ TEST(PageLockTableTest, SplitMovesOnlyHeldLocks) {
 
   // The lock of `high` was released before the split: nothing is handed over
   EXPECT_TRUE(right.IsEmpty());
-  EXPECT_FALSE(right.TryRelease(high, false));
-  EXPECT_FALSE(left.TryRelease(high, false));
+  EXPECT_FALSE(right.TryRelease(high, TXN_TS, false));
+  EXPECT_FALSE(left.TryRelease(high, TXN_TS, false));
   ReleaseShared(left, low);
   EXPECT_TRUE(left.IsEmpty());
 }
@@ -289,12 +289,12 @@ TEST(PageLockTableTest, MergeKeepsEntriesOfRight) {
   left.MergeInto(right);
 
   EXPECT_TRUE(left.IsEmpty());
-  EXPECT_FALSE(right.TryRelease(Key{2}, false));
+  EXPECT_FALSE(right.TryRelease(Key{2}, TXN_TS, false));
   // The lock of right_free was released before the merge: it is free
   EXPECT_TRUE(AcquireExclusive(right, right_free, 3, false));
   ReleaseExclusive(right, right_free);
   for (auto &key : left_keys) {
-    EXPECT_FALSE(left.TryRelease(key, true));
+    EXPECT_FALSE(left.TryRelease(key, TXN_TS, true));
     EXPECT_FALSE(AcquireShared(right, key, 3));
     ReleaseExclusive(right, key);
   }
@@ -326,12 +326,12 @@ TEST(PageLockTableTest, SplitWithDescendingOrder) {
   left.MoveLocksAboveInto(Key{0x80}, DESCENDING_CMP, right);
 
   for (auto &key : staying) {
-    EXPECT_FALSE(right.TryRelease(key, false));
+    EXPECT_FALSE(right.TryRelease(key, TXN_TS, false));
     ReleaseShared(left, key);
   }
 
   for (auto &key : moving) {
-    EXPECT_FALSE(left.TryRelease(key, true));
+    EXPECT_FALSE(left.TryRelease(key, TXN_TS, true));
     ReleaseExclusive(right, key);
   }
 
@@ -407,11 +407,11 @@ TEST(PageLockTableTest, SplitOrdersLongKeysAsMemcmp) {
   left.MoveLocksAboveInto(separator, CMP, right);
 
   for (auto &key : staying) {
-    EXPECT_FALSE(right.TryRelease(key, false));
+    EXPECT_FALSE(right.TryRelease(key, TXN_TS, false));
     ReleaseShared(left, key);
   }
   for (auto &key : moving) {
-    EXPECT_FALSE(left.TryRelease(key, true));
+    EXPECT_FALSE(left.TryRelease(key, TXN_TS, true));
     ReleaseExclusive(right, key);
   }
   EXPECT_TRUE(left.IsEmpty());

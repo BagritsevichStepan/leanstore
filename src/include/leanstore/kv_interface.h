@@ -12,7 +12,6 @@ namespace leanstore {
 using AccessPayloadFunc = std::function<void(std::span<const u8>)>;
 using ModifyPayloadFunc = std::function<void(std::span<u8>)>;
 using AccessRecordFunc  = std::function<bool(std::span<u8>, std::span<u8>)>;
-using KeyPredicateFunc = std::function<bool(std::span<const u8>)>;
 
 enum class ComparisonOperator : u8 {
   MEMCMP,
@@ -42,8 +41,6 @@ class KVInterface {
   virtual auto UpdateInPlace(std::span<u8> key, const ModifyPayloadFunc &func, FixedSizeDelta *delta) -> OpResult = 0;
   virtual auto ScanAscending(std::span<u8> key, const AccessRecordFunc &fn) -> OpResult                           = 0;
   virtual auto ScanDescending(std::span<u8> key, const AccessRecordFunc &fn) -> OpResult                          = 0;
-  virtual auto ExtractAscending(std::span<u8> key, const KeyPredicateFunc &matches, const AccessRecordFunc &consume)
-    -> OpResult = 0;
   virtual auto CountEntries() -> u64                                                                              = 0;
   virtual auto SizeInMB() -> float                                                                                = 0;
 

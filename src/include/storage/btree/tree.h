@@ -18,6 +18,9 @@
 
 namespace leanstore::storage {
 
+using KeyPredicateFunc = std::function<bool(std::span<const u8>)>;
+using ConsumeRecordFunc = std::function<void(std::span<const u8>, std::span<const u8>)>;
+
 class BTree : public KVInterface {
  public:
   BTree(buffer::BufferManager *buffer_pool, u32 tree_slot, bool system = false);
@@ -37,8 +40,6 @@ class BTree : public KVInterface {
   auto UpdateInPlace(std::span<u8> key, const ModifyPayloadFunc &func, FixedSizeDelta *delta) -> OpResult override;
   auto ScanAscending(std::span<u8> key, const AccessRecordFunc &fn) -> OpResult override;
   auto ScanDescending(std::span<u8> key, const AccessRecordFunc &fn) -> OpResult override;
-  auto ExtractAscending(std::span<u8> key, const KeyPredicateFunc &matches, const AccessRecordFunc &consume)
-    -> OpResult override;
   auto CountEntries() -> u64 override;
   auto SizeInMB() -> float override;
   auto LookUpBlob(std::span<const u8> blob_key, const ComparisonLambda &cmp, const AccessPayloadFunc &read_cb)
@@ -55,6 +56,10 @@ class BTree : public KVInterface {
      Releases the lock of key, held by txn_ts, and returns the waiters to wake up */
   auto ReleaseInPageLock(timestamp_t txn_ts, std::span<const u8> key, pageid_t leaf_hint, bool exclusive)
     -> std::vector<wid_t>;
+
+  /* API for system trees only. Consumes and removes the records matching `matches` in ascending order */
+  auto ExtractAscending(std::span<u8> key, const KeyPredicateFunc &matches, const ConsumeRecordFunc &consume)
+    -> OpResult;
 
  private:
   /* Iterate all pages utilities */
@@ -89,46 +94,7 @@ class BTree : public KVInterface {
                        std::span<u8> key, std::span<const u8> payload, const AccessPayloadFunc &func) -> OpResult;
 
   /* Access record utility for scan */
-  template <typename PageGuard>
-  inline auto AccessRecord(PageGuard &node, u64 pos, const AccessRecordFunc &fn) -> OpResult {
-    u64 key_len = node->header.prefix_len + node->slots[pos].key_length;
-    u8 key[key_len];
-    std::memcpy(key, node->GetPrefix(), node->header.prefix_len);
-    std::memcpy(key + node->header.prefix_len, node->GetKey(pos), node->slots[pos].key_length);
-    auto key_span = std::span<u8>{key, key_len};
-    // Concurrency Control
-    if (!system_ && !node.TryLockShared(metadata_slotid_, key_span)) { return OpResult::ABORT_TX; }
-
-    // Actual scan read
-    auto payload = node->GetPayload(pos);
-    auto &txn    = transaction::Transaction::active_txn;
-
-    if (IsMvcc() && txn.iso_level >= transaction::IsolationLevel::SNAPSHOT_ISOLATION) {
-      LOCKABLE_TUPLE_STACK(lockable, key_span, metadata_slotid_);
-      auto latest_tuple_ts = node->GetTimestamp(pos);
-      if (txn.start_ts < latest_tuple_ts) {
-        auto read_success = txn.LookupVersionChain(
-          lockable,
-          [&](std::span<const u8> tuple_data) {
-            payload = std::span<u8>(const_cast<u8 *>(tuple_data.data()), tuple_data.size());
-          },
-          latest_tuple_ts);
-        txn.UpdateTupleReadTS(lockable, latest_tuple_ts);
-        // TODO(XXX): What should we do if this tuple version is a deleted one?
-        if (read_success) {
-          auto ret = fn(key_span, payload);
-          return (ret) ? OpResult::OK : OpResult::STOP_SCAN;
-        } else {
-          return OpResult::OK;
-        }
-      }
-      txn.UpdateTupleReadTS(lockable, latest_tuple_ts);
-    }
-    
-    auto ret = fn(key_span, payload);
-    node.ValidateOrRestart(false);
-    return (ret) ? OpResult::OK : OpResult::STOP_SCAN;
-  }
+  auto AccessRecord(sync::OptimisticGuard<BTreeNode> &node, u64 pos, const AccessRecordFunc &fn) -> OpResult;
 
   /* Core properties */
   buffer::BufferManager *buffer_;

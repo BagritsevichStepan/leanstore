@@ -78,6 +78,10 @@ inline auto PageLockTable::AsKey(std::span<const u8> key) -> std::string_view {
   return {reinterpret_cast<const char *>(key.data()), key.size()};
 }
 
+inline auto PageLockTable::IsEmpty() const -> bool {
+  return std::visit([](const auto &entries) { return entries.empty(); }, entries_);
+}
+
 template <typename Fn>
 void PageLockTable::ForEachHeldLock(Fn &&fn) const {
   std::visit(

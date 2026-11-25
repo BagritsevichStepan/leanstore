@@ -384,43 +384,6 @@ TEST_F(TestSVCCInPageEviction, MergeThenEvict) {
   ExpectNoLocksInMemory();
 }
 
-/**
- * ExtractAscending locks all the matching records of a leaf before it consumes any:
- * a conflict on one of them leaves the whole leaf as it is.
- * Disabled: ExtractAscending still consumes the records before the conflict
- */
-TEST_F(TestSVCCInPageEviction, DISABLED_ExtractWithConflictRemovesNothing) {
-  Preload(5, 1);
-
-  StartTransaction();
-  Update(3, Value(3, 2), OpResult::OK);
-
-  RunInOtherWorker([&]() {
-    auto from = Key(1);
-    u32 consumed_count = 0;
-
-    StartTransaction();
-    auto ret = tree_->ExtractAscending(
-      from,
-      [](std::span<const u8>) {
-        return true;
-      },
-      [&](std::span<u8>, std::span<u8>) {
-        consumed_count++;
-        return true;
-      });
-    EXPECT_EQ(ret, OpResult::ABORT_TX);
-    EXPECT_EQ(consumed_count, 0U);
-    txn_man_->AbortTransaction();
-  });
-
-  for (u8 key = 1; key <= 5; key++) {
-    ExpectValue(key, (key == 3) ? Value(3, 2) : Value(key, 1));
-  }
-  txn_man_->CommitTransaction();
-  ExpectNoLocksInMemory();
-}
-
 }  // namespace leanstore
 
 auto main(int argc, char **argv) -> int {
